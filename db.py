@@ -6,6 +6,7 @@ same points or hand out the same stock item twice.
 """
 from __future__ import annotations
 
+import secrets
 import sqlite3
 import threading
 import time
@@ -35,7 +36,7 @@ CREATE TABLE IF NOT EXISTS products (
     name        TEXT NOT NULL,
     price       INTEGER NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    kind        TEXT NOT NULL,            -- 'stock' | 'role' | 'manual'
+    kind        TEXT NOT NULL,            -- 'stock' | 'role' | 'manual' | 'lifetime'
     role_id     INTEGER,
     active      INTEGER NOT NULL DEFAULT 1
 );
@@ -86,6 +87,23 @@ CREATE TABLE IF NOT EXISTS withdrawals (
     note       TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS lifetime_keys (
+    key         TEXT PRIMARY KEY,
+    guild_id    INTEGER NOT NULL,
+    order_id    INTEGER,                  -- the purchase that made it (NULL if an admin issued it)
+    created_by  INTEGER NOT NULL,
+    redeemed_by INTEGER,
+    redeemed_at INTEGER,
+    revoked     INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lifetime_members (
+    guild_id   INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    key        TEXT,                      -- NULL when an admin granted it directly
+    granted_at INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS ledger (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id   INTEGER NOT NULL,
@@ -120,6 +138,7 @@ class Purchase:
     product: Product
     delivered: str
     balance: int
+    price: int  # what was actually paid (0 for lifetime members)
 
 
 class Database:
@@ -295,18 +314,23 @@ class Database:
                 delivered = item["content"]
             elif product.kind == "manual":
                 status = "pending"
-            balance = self._add(c, guild_id, user_id, -product.price, f"구매: {product.name}")
+            elif product.kind == "lifetime":
+                delivered = self._new_key(c, guild_id, user_id)
+            price = self._price_for(c, guild_id, user_id, product)
+            balance = self._add(c, guild_id, user_id, -price, f"구매: {product.name}")
             c.execute(
                 "UPDATE users SET total_spent=total_spent+? WHERE guild_id=? AND user_id=?",
-                (product.price, guild_id, user_id),
+                (price, guild_id, user_id),
             )
             cur = c.execute(
                 "INSERT INTO orders (guild_id, user_id, product_id, product_name, price, "
                 "delivered, status, created_at) VALUES (?,?,?,?,?,?,?,?)",
-                (guild_id, user_id, product.id, product.name, product.price, delivered,
+                (guild_id, user_id, product.id, product.name, price, delivered,
                  status, int(time.time())),
             )
-            return Purchase(cur.lastrowid, product, delivered, balance)
+            if product.kind == "lifetime":
+                c.execute("UPDATE lifetime_keys SET order_id=? WHERE key=?", (cur.lastrowid, delivered))
+            return Purchase(cur.lastrowid, product, delivered, balance, price)
 
     def refund_order(self, guild_id: int, order_id: int) -> sqlite3.Row:
         with self._tx() as c:
@@ -317,7 +341,13 @@ class Database:
                 raise ShopError("존재하지 않는 주문이에요.")
             if order["status"] == "refunded":
                 raise ShopError("이미 환불된 주문이에요.")
-            self._add(c, guild_id, order["user_id"], order["price"], f"환불: 주문 #{order_id}")
+            if order["price"]:
+                self._add(c, guild_id, order["user_id"], order["price"], f"환불: 주문 #{order_id}")
+            # A refunded lifetime key stops working, and so does the membership it gave.
+            if c.execute(
+                "SELECT 1 FROM lifetime_keys WHERE key=? AND order_id=?", (order["delivered"], order_id)
+            ).fetchone():
+                self._revoke_key(c, guild_id, order["delivered"])
             c.execute(
                 "UPDATE users SET total_spent=MAX(total_spent-?, 0) WHERE guild_id=? AND user_id=?",
                 (order["price"], guild_id, order["user_id"]),
@@ -489,6 +519,114 @@ class Database:
             charge = c.execute("SELECT * FROM charges WHERE id=?", (cur.lastrowid,)).fetchone()
             c.execute("UPDATE deposits SET charge_id=? WHERE id=?", (charge["id"], deposit_id))
             return dep, self._approve(c, charge, points, admin_id)
+
+    # ------------------------------------------------------------ lifetime --
+    # A lifetime ("평생 무료") key, once redeemed, makes every product free for
+    # that user. Keys are separate from the buyer so they can be gifted.
+    KEY_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I lookalikes
+
+    @staticmethod
+    def _is_lifetime(c: sqlite3.Connection, guild_id: int, user_id: int) -> bool:
+        return c.execute(
+            "SELECT 1 FROM lifetime_members WHERE guild_id=? AND user_id=?", (guild_id, user_id)
+        ).fetchone() is not None
+
+    def is_lifetime(self, guild_id: int, user_id: int) -> bool:
+        return self._is_lifetime(self._conn, guild_id, user_id)
+
+    @staticmethod
+    def _price_for(c: sqlite3.Connection, guild_id: int, user_id: int, product: Product) -> int:
+        # Lifetime members get everything free, except more lifetime keys
+        # (otherwise one key could mint unlimited free keys to hand out).
+        if product.kind != "lifetime" and Database._is_lifetime(c, guild_id, user_id):
+            return 0
+        return product.price
+
+    def price_for(self, guild_id: int, user_id: int, product: Product) -> int:
+        return self._price_for(self._conn, guild_id, user_id, product)
+
+    @staticmethod
+    def _new_key(c: sqlite3.Connection, guild_id: int, created_by: int) -> str:
+        while True:
+            parts = ["".join(secrets.choice(Database.KEY_ALPHABET) for _ in range(4)) for _ in range(3)]
+            key = "LIFE-" + "-".join(parts)
+            try:
+                c.execute(
+                    "INSERT INTO lifetime_keys (key, guild_id, created_by, created_at) VALUES (?,?,?,?)",
+                    (key, guild_id, created_by, int(time.time())),
+                )
+                return key
+            except sqlite3.IntegrityError:
+                continue
+
+    @staticmethod
+    def _revoke_key(c: sqlite3.Connection, guild_id: int, key: str) -> None:
+        c.execute("UPDATE lifetime_keys SET revoked=1 WHERE key=? AND guild_id=?", (key, guild_id))
+        c.execute("DELETE FROM lifetime_members WHERE guild_id=? AND key=?", (guild_id, key))
+
+    def get_key(self, key: str) -> sqlite3.Row | None:
+        return self._conn.execute("SELECT * FROM lifetime_keys WHERE key=?", (key,)).fetchone()
+
+    def issue_key(self, guild_id: int, admin_id: int) -> str:
+        with self._tx() as c:
+            return self._new_key(c, guild_id, admin_id)
+
+    def redeem_key(self, guild_id: int, user_id: int, key: str) -> None:
+        key = key.strip().upper()
+        with self._tx() as c:
+            row = c.execute(
+                "SELECT * FROM lifetime_keys WHERE key=? AND guild_id=?", (key, guild_id)
+            ).fetchone()
+            if row is None:
+                raise ShopError("존재하지 않는 키예요. 하이픈(-)까지 정확히 입력해 주세요.")
+            if row["revoked"]:
+                raise ShopError("사용이 중지된 키예요. 관리자에게 문의해 주세요.")
+            if row["redeemed_by"] is not None:
+                raise ShopError("이미 사용된 키예요.")
+            if self._is_lifetime(c, guild_id, user_id):
+                raise ShopError("이미 평생 무료 회원이에요! 이 키는 다른 사람에게 선물할 수 있어요.")
+            c.execute(
+                "UPDATE lifetime_keys SET redeemed_by=?, redeemed_at=? WHERE key=?",
+                (user_id, int(time.time()), key),
+            )
+            c.execute(
+                "INSERT INTO lifetime_members (guild_id, user_id, key, granted_at) VALUES (?,?,?,?)",
+                (guild_id, user_id, key, int(time.time())),
+            )
+
+    def grant_lifetime(self, guild_id: int, user_id: int) -> bool:
+        """Make a user a lifetime member without a key. False if they already are one."""
+        with self._tx() as c:
+            cur = c.execute(
+                "INSERT OR IGNORE INTO lifetime_members (guild_id, user_id, granted_at) VALUES (?,?,?)",
+                (guild_id, user_id, int(time.time())),
+            )
+            return cur.rowcount > 0
+
+    def revoke_lifetime(self, guild_id: int, user_id: int) -> bool:
+        with self._tx() as c:
+            row = c.execute(
+                "SELECT key FROM lifetime_members WHERE guild_id=? AND user_id=?", (guild_id, user_id)
+            ).fetchone()
+            if row is None:
+                return False
+            if row["key"]:
+                self._revoke_key(c, guild_id, row["key"])
+            c.execute(
+                "DELETE FROM lifetime_members WHERE guild_id=? AND user_id=?", (guild_id, user_id)
+            )
+            return True
+
+    def lifetime_summary(self, guild_id: int) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+        """(members, unused keys)"""
+        members = self._conn.execute(
+            "SELECT * FROM lifetime_members WHERE guild_id=? ORDER BY granted_at", (guild_id,)
+        ).fetchall()
+        unused = self._conn.execute(
+            "SELECT * FROM lifetime_keys WHERE guild_id=? AND redeemed_by IS NULL AND revoked=0 "
+            "ORDER BY created_at", (guild_id,)
+        ).fetchall()
+        return members, unused
 
     # --------------------------------------------------------------- vault --
     # The vault is the real money (won) users paid for points: every approved
