@@ -170,11 +170,11 @@ def fmt_time(ts: int) -> str:
 # ------------------------------------------------------------ user flows ----
 async def show_balance(interaction: discord.Interaction, user: discord.abc.User) -> None:
     row = db.get_user(interaction.guild_id, user.id)
-    e = embed(f"💰 {user.display_name}님의 포인트", f"## {row['balance']:,} P")
-    e.add_field(name="누적 충전", value=f"{row['total_charged']:,} P")
-    e.add_field(name="누적 사용", value=f"{row['total_spent']:,} P")
+    e = embed(f"💰 {user.display_name}님의 잔액", f"## {row['balance']:,}원")
+    e.add_field(name="누적 충전", value=f"{row['total_charged']:,}원")
+    e.add_field(name="누적 사용", value=f"{row['total_spent']:,}원")
     if db.is_lifetime(interaction.guild_id, user.id):
-        e.add_field(name="👑 평생 무료 회원", value="모든 상품을 0 P로 구매할 수 있어요.", inline=False)
+        e.add_field(name="👑 평생 무료 회원", value="모든 상품을 0원으로 구매할 수 있어요.", inline=False)
     await reply(interaction, e)
 
 
@@ -187,7 +187,7 @@ async def claim_daily(interaction: discord.Interaction) -> None:
         return await error(interaction, "오늘은 이미 출석했어요. 내일(자정 이후) 다시 와 주세요!")
     await reply(
         interaction,
-        embed("✅ 출석 완료", f"**{amount:,} P**를 받았어요!\n현재 잔액: **{balance:,} P**", COLOR_OK),
+        embed("✅ 출석 완료", f"**{amount:,}원**을 받았어요!\n현재 잔액: **{balance:,}원**", COLOR_OK),
     )
 
 
@@ -196,7 +196,7 @@ async def show_history(interaction: discord.Interaction) -> None:
     if not orders:
         return await reply(interaction, embed("🧾 구매 내역", "아직 구매한 상품이 없어요."))
     lines = [
-        f"`#{o['id']}` **{o['product_name']}** — {o['price']:,} P · "
+        f"`#{o['id']}` **{o['product_name']}** — {o['price']:,}원 · "
         f"{STATUS_LABEL.get(o['status'], o['status'])} · {fmt_time(o['created_at'])}"
         for o in orders
     ]
@@ -209,13 +209,13 @@ async def open_shop(interaction: discord.Interaction) -> None:
         return await error(interaction, "아직 판매 중인 상품이 없어요.")
     balance = db.get_user(interaction.guild_id, interaction.user.id)["balance"]
     lifetime = db.is_lifetime(interaction.guild_id, interaction.user.id)
-    e = embed("🛒 상점", f"보유 포인트: **{balance:,} P**\n아래 메뉴에서 구매할 상품을 골라 주세요.")
+    e = embed("🛒 상점", f"보유 잔액: **{balance:,}원**\n아래 메뉴에서 구매할 상품을 골라 주세요.")
     if lifetime:
-        e.description += "\n👑 **평생 무료 회원**이라 모든 상품이 **0 P**예요!"
+        e.description += "\n👑 **평생 무료 회원**이라 모든 상품이 **0원**예요!"
     for p in products[:25]:
         stock = f" · 재고 {p.stock}개" if p.kind == "stock" else ""
         price = db.price_for(interaction.guild_id, interaction.user.id, p)
-        price_text = f"~~{p.price:,} P~~ 0 P" if price != p.price else f"{p.price:,} P"
+        price_text = f"~~{p.price:,}원~~ 0원" if price != p.price else f"{p.price:,}원"
         e.add_field(
             name=f"#{p.id} {p.name} — {price_text}",
             value=f"{p.description or '설명 없음'}\n`{KIND_LABEL[p.kind]}{stock}`",
@@ -238,7 +238,7 @@ class ShopView(discord.ui.View):
             discord.SelectOption(
                 label=f"{p.name}"[:100],
                 description=(
-                    f"{p.price:,} P · " + ("품절" if p.kind == "stock" and p.stock == 0
+                    f"{p.price:,}원 · " + ("품절" if p.kind == "stock" and p.stock == 0
                                            else KIND_LABEL[p.kind])
                 )[:100],
                 value=str(p.id),
@@ -258,9 +258,9 @@ class ShopView(discord.ui.View):
         price = db.price_for(interaction.guild_id, interaction.user.id, product)
         e = embed(
             "🛍️ 구매 확인",
-            f"**{product.name}**을(를) **{price:,} P**에 구매할까요?"
+            f"**{product.name}**을(를) **{price:,}원**에 구매할까요?"
             + (" (👑 평생 무료 회원 혜택)" if price != product.price else "")
-            + f"\n\n보유 포인트: {balance:,} P → 구매 후: {balance - price:,} P",
+            + f"\n\n보유 잔액: {balance:,}원 → 구매 후: {balance - price:,}원",
             COLOR_WARN,
         )
         await interaction.response.send_message(
@@ -305,14 +305,14 @@ async def purchase(interaction: discord.Interaction, product_id: int) -> None:
             db.refund_order(guild.id, result.order_id)
             return await error(
                 interaction,
-                "역할을 지급하지 못해 포인트를 돌려드렸어요. 관리자에게 문의해 주세요.\n"
+                "역할을 지급하지 못해 금액을 잔액으로 돌려드렸어요. 관리자에게 문의해 주세요.\n"
                 "(봇의 역할이 지급할 역할보다 위에 있어야 해요)",
             )
 
     e = embed("🎉 구매 완료", f"**{product.name}** 구매가 완료됐어요!", COLOR_OK)
     e.add_field(name="주문 번호", value=f"#{result.order_id}")
-    e.add_field(name="사용 포인트", value=f"{result.price:,} P")
-    e.add_field(name="남은 포인트", value=f"{result.balance:,} P")
+    e.add_field(name="사용 금액", value=f"{result.price:,}원")
+    e.add_field(name="남은 잔액", value=f"{result.balance:,}원")
     if product.kind == "stock":
         e.add_field(name="📦 상품 내용", value=f"||{result.delivered[:1000]}||", inline=False)
         dm_embed = embed(f"📦 {product.name} 구매 상품", f"```\n{result.delivered[:3900]}\n```", COLOR_OK)
@@ -331,7 +331,7 @@ async def purchase(interaction: discord.Interaction, product_id: int) -> None:
         )
         dm_embed = embed(
             "🔑 평생 무료 키",
-            f"```\n{result.delivered}\n```\n`/키등록`으로 등록하면 모든 상품을 0 P로 구매할 수 있어요.",
+            f"```\n{result.delivered}\n```\n`/키등록`으로 등록하면 모든 상품을 0원으로 구매할 수 있어요.",
             COLOR_OK,
         )
         dm_embed.set_footer(text=f"{guild.name} · 주문 #{result.order_id}")
@@ -346,7 +346,7 @@ async def purchase(interaction: discord.Interaction, product_id: int) -> None:
     log_e.add_field(name="구매자", value=interaction.user.mention)
     log_e.add_field(name="상품", value=f"#{product.id} {product.name}")
     log_e.add_field(
-        name="가격", value=f"{result.price:,} P" + (" (평생 회원)" if result.price != product.price else "")
+        name="가격", value=f"{result.price:,}원" + (" (평생 회원)" if result.price != product.price else "")
     )
     log_e.set_footer(text=f"주문 #{result.order_id}")
     view = None
@@ -360,7 +360,7 @@ async def purchase(interaction: discord.Interaction, product_id: int) -> None:
 
 
 # ---------------------------------------------------------------- charge ----
-class ChargeModal(discord.ui.Modal, title="포인트 충전 신청"):
+class ChargeModal(discord.ui.Modal, title="잔액 충전 신청"):
     amount = discord.ui.TextInput(label="충전 금액 (원)", placeholder="예: 10000", max_length=9)
     depositor = discord.ui.TextInput(
         label="입금자명", placeholder="실제로 입금할 때 표시되는 이름", max_length=20
@@ -389,8 +389,8 @@ class ChargeModal(discord.ui.Modal, title="포인트 충전 신청"):
         if balance is not None:  # the deposit had already arrived
             await reply(
                 interaction,
-                embed("✅ 충전 완료", f"입금이 확인되어 **{points:,} P**가 충전됐어요!\n"
-                      f"현재 잔액: **{balance:,} P**", COLOR_OK),
+                embed("✅ 충전 완료", f"입금이 확인되어 **{points:,}원**이 충전됐어요!\n"
+                      f"현재 잔액: **{balance:,}원**", COLOR_OK),
             )
             charge = db.get_charge(charge_id)
             return await send_log(interaction.guild, charge_embed(charge, "자동 승인 (입금 먼저 확인됨)"))
@@ -398,13 +398,13 @@ class ChargeModal(discord.ui.Modal, title="포인트 충전 신청"):
         e = embed(
             "🏦 입금 안내",
             "아래 계좌로 **정확한 금액**을 **신청한 입금자명**으로 보내 주세요.\n"
-            "입금이 확인되면 자동으로 포인트가 충전되고 DM으로 알려 드려요.",
+            "입금이 확인되면 자동으로 잔액이 충전되고 DM으로 알려 드려요.",
             COLOR_INFO,
         )
         e.add_field(name="입금 계좌", value=db.get_setting(guild_id, "bank_info"), inline=False)
         e.add_field(name="입금 금액", value=f"**{won:,}원**")
         e.add_field(name="입금자명", value=f"**{name}**")
-        e.add_field(name="충전될 포인트", value=f"{points:,} P")
+        e.add_field(name="충전될 금액", value=f"{points:,}원")
         e.set_footer(text=f"신청 #{charge_id} · {CHARGE_EXPIRE_MINUTES}분 안에 입금해 주세요")
         await reply(interaction, e)
 
@@ -429,7 +429,7 @@ def charge_embed(charge, status: str | None = None) -> discord.Embed:
     e.add_field(name="금액", value=f"{charge['amount']:,}원")
     e.add_field(name="입금자명", value=charge["depositor"])
     if charge["status"] == "approved":
-        e.add_field(name="지급 포인트", value=f"{charge['points']:,} P")
+        e.add_field(name="충전 금액", value=f"{charge['points']:,}원")
     e.set_footer(text=f"신청 #{charge['id']}")
     return e
 
@@ -488,7 +488,7 @@ class ChargeButton(
         if approve:
             await dm(charge["user_id"], embed(
                 "✅ 충전 완료",
-                f"**{interaction.guild.name}**에서 **{points:,} P**가 충전됐어요!\n현재 잔액: **{balance:,} P**",
+                f"**{interaction.guild.name}**에서 **{points:,}원**이 충전됐어요!\n현재 잔액: **{balance:,}원**",
                 COLOR_OK,
             ))
         else:
@@ -532,7 +532,7 @@ class OrderButton(
                 await after_refund(interaction.guild, order)
                 text, color = "↩️ 주문 환불", COLOR_ERR
                 user_msg = (f"주문 #{order['id']} **{order['product_name']}**이(가) 환불되어 "
-                            f"{order['price']:,} P를 돌려드렸어요.")
+                            f"{order['price']:,}원을 돌려드렸어요.")
         except ShopError as exc:
             return await error(interaction, str(exc))
         e = interaction.message.embeds[0] if interaction.message.embeds else embed(text)
@@ -551,7 +551,7 @@ async def redeem(interaction: discord.Interaction, key: str) -> None:
     await set_lifetime_role(interaction.guild, interaction.user.id, give=True)
     await reply(interaction, embed(
         "👑 평생 무료 회원 등록 완료",
-        "이제 상점의 모든 상품을 **0 P**로 구매할 수 있어요!\n(평생 무료 키 상품은 제외)",
+        "이제 상점의 모든 상품을 **0원**로 구매할 수 있어요!\n(평생 무료 키 상품은 제외)",
         COLOR_OK,
     ))
     await send_log(interaction.guild, embed(
@@ -617,8 +617,8 @@ async def handle_deposit(guild_id: int, amount: int, name: str, raw: str, key: s
             await send_log(guild, charge_embed(charge, f"입금 #{deposit_id} 확인 → 자동 승인"))
         await dm(charge["user_id"], embed(
             "✅ 충전 완료",
-            f"입금 **{amount:,}원**이 확인되어 **{charge['points']:,} P**가 충전됐어요!\n"
-            f"현재 잔액: **{balance:,} P**",
+            f"입금 **{amount:,}원**이 확인되어 **{charge['points']:,}원**이 충전됐어요!\n"
+            f"현재 잔액: **{balance:,}원**",
             COLOR_OK,
         ))
         return {"ok": True, "matched": True, "charge_id": charge["id"]}
@@ -668,7 +668,7 @@ async def deposit_webhook(request: web.Request) -> web.Response:
             if "입금" in text:
                 await send_log(client.get_guild(DEPOSIT_GUILD_ID), embed(
                     "⚠️ 읽지 못한 입금 알림",
-                    f"```\n{text[:1500]}\n```\n입금이 맞다면 `/포인트 지급`으로 직접 처리하고, "
+                    f"```\n{text[:1500]}\n```\n입금이 맞다면 `/잔액관리 지급`으로 직접 처리하고, "
                     "이 형식을 읽도록 DEPOSIT_REGEX를 설정해 주세요.",
                     COLOR_WARN,
                 ))
@@ -768,14 +768,14 @@ def admin_only():
 async def product_autocomplete(interaction: discord.Interaction, current: str):
     products = db.list_products(interaction.guild_id, include_inactive=True)
     return [
-        app_commands.Choice(name=f"#{p.id} {p.name} ({p.price:,} P)"[:100], value=p.id)
+        app_commands.Choice(name=f"#{p.id} {p.name} ({p.price:,}원)"[:100], value=p.id)
         for p in products
         if current.lower() in p.name.lower() or current == str(p.id)
     ][:25]
 
 
 # --------------------------------------------------------- user commands ----
-@tree.command(name="잔액", description="포인트 잔액을 확인해요")
+@tree.command(name="잔액", description="내 잔액을 확인해요")
 @app_commands.guild_only()
 @app_commands.describe(유저="확인할 유저 (비우면 나)")
 async def cmd_balance(interaction: discord.Interaction, 유저: discord.Member | None = None):
@@ -784,19 +784,19 @@ async def cmd_balance(interaction: discord.Interaction, 유저: discord.Member |
     await show_balance(interaction, 유저 or interaction.user)
 
 
-@tree.command(name="출석", description="하루 한 번 출석 체크로 포인트를 받아요")
+@tree.command(name="출석", description="하루 한 번 출석 체크로 보상을 받아요")
 @app_commands.guild_only()
 async def cmd_daily(interaction: discord.Interaction):
     await claim_daily(interaction)
 
 
-@tree.command(name="충전", description="계좌 입금으로 포인트를 충전해요")
+@tree.command(name="충전", description="계좌 입금으로 잔액을 충전해요")
 @app_commands.guild_only()
 async def cmd_charge(interaction: discord.Interaction):
     await open_charge(interaction)
 
 
-@tree.command(name="상점", description="포인트로 상품을 구매해요")
+@tree.command(name="상점", description="잔액으로 상품을 구매해요")
 @app_commands.guild_only()
 async def cmd_shop(interaction: discord.Interaction):
     await open_shop(interaction)
@@ -815,18 +815,18 @@ async def cmd_redeem(interaction: discord.Interaction, 키: str):
     await redeem(interaction, 키)
 
 
-@tree.command(name="랭킹", description="포인트 보유 순위를 확인해요")
+@tree.command(name="랭킹", description="잔액 순위를 확인해요")
 @app_commands.guild_only()
 async def cmd_rank(interaction: discord.Interaction):
     rows = db.leaderboard(interaction.guild_id)
     if not rows:
-        return await reply(interaction, embed("🏆 포인트 랭킹", "아직 포인트를 가진 사람이 없어요."))
+        return await reply(interaction, embed("🏆 잔액 랭킹", "아직 잔액이 있는 사람이 없어요."))
     medals = ["🥇", "🥈", "🥉"]
     lines = [
-        f"{medals[i] if i < 3 else f'`{i + 1}.`'} <@{r['user_id']}> — **{r['balance']:,} P**"
+        f"{medals[i] if i < 3 else f'`{i + 1}.`'} <@{r['user_id']}> — **{r['balance']:,}원**"
         for i, r in enumerate(rows)
     ]
-    await reply(interaction, embed("🏆 포인트 랭킹", "\n".join(lines)))
+    await reply(interaction, embed("🏆 잔액 랭킹", "\n".join(lines)))
 
 
 @tree.command(name="자판기설치", description="[관리자] 이 채널에 자판기 패널을 올려요")
@@ -836,12 +836,12 @@ async def cmd_rank(interaction: discord.Interaction):
 async def cmd_panel(interaction: discord.Interaction):
     e = embed(
         f"🏪 {interaction.guild.name} 자판기",
-        "아래 버튼으로 포인트를 충전하고 상품을 구매할 수 있어요.\n\n"
-        "💳 **충전** — 계좌 입금 후 자동으로 포인트 충전\n"
-        "🛒 **상품 구매** — 포인트로 상품 구매 (24시간 자동 판매)\n"
+        "아래 버튼으로 잔액을 충전하고 상품을 구매할 수 있어요.\n\n"
+        "💳 **충전** — 계좌 입금 후 자동으로 잔액 충전\n"
+        "🛒 **상품 구매** — 잔액으로 상품 구매 (24시간 자동 판매)\n"
         "💰 **내 정보** — 잔액·누적 충전 확인\n"
-        "📅 **출석 체크** — 하루 한 번 무료 포인트\n"
-        "🔑 **키 등록** — 평생 무료 키를 등록하면 모든 상품이 0 P",
+        "📅 **출석 체크** — 하루 한 번 무료 적립금\n"
+        "🔑 **키 등록** — 평생 무료 키를 등록하면 모든 상품이 0원",
     )
     await interaction.channel.send(embed=e, view=PanelView())
     await reply(interaction, embed("✅ 자판기 패널을 설치했어요.", color=COLOR_OK))
@@ -856,7 +856,7 @@ def admin_group(name: str, description: str) -> app_commands.Group:
 
 
 settings_group = admin_group("설정", "[관리자] 봇 설정")
-points_group = admin_group("포인트", "[관리자] 포인트 지급·차감")
+points_group = admin_group("잔액관리", "[관리자] 유저 잔액 지급·차감")
 product_group = admin_group("상품", "[관리자] 상품 관리")
 stock_group = admin_group("재고", "[관리자] 재고 관리")
 order_group = admin_group("주문", "[관리자] 주문 처리")
@@ -874,7 +874,7 @@ async def set_show(interaction: discord.Interaction):
     e = embed("⚙️ 현재 설정")
     e.add_field(name="로그 채널", value=f"<#{log_ch}>" if log_ch else "없음")
     e.add_field(name="관리자 역할", value=f"<@&{role}>" if role else "없음 (서버 관리 권한만)")
-    e.add_field(name="출석 포인트", value=f"{setting_int(g, 'daily_points', 100):,} P")
+    e.add_field(name="출석 보상", value=f"{setting_int(g, 'daily_points', 100):,}원")
     e.add_field(name="최소 충전", value=f"{setting_int(g, 'min_charge', 1000):,}원")
     e.add_field(name="충전 보너스", value=f"{setting_int(g, 'charge_bonus', 0)}%")
     life_role = setting_int(g, "lifetime_role", 0)
@@ -916,11 +916,11 @@ async def set_lifetime_role_cmd(interaction: discord.Interaction, 역할: discor
     await reply(interaction, embed("✅ 설정 완료", f"평생 회원 역할: {역할.mention}", COLOR_OK))
 
 
-@settings_group.command(name="출석포인트", description="출석 체크 보상 (0이면 출석 끔)")
+@settings_group.command(name="출석보상", description="출석 체크 보상 금액 (0이면 출석 끔)")
 @admin_only()
-async def set_daily(interaction: discord.Interaction, 포인트: app_commands.Range[int, 0, 1_000_000]):
-    db.set_setting(interaction.guild_id, "daily_points", str(포인트))
-    await reply(interaction, embed("✅ 설정 완료", f"출석 포인트: {포인트:,} P", COLOR_OK))
+async def set_daily(interaction: discord.Interaction, 금액: app_commands.Range[int, 0, 1_000_000]):
+    db.set_setting(interaction.guild_id, "daily_points", str(금액))
+    await reply(interaction, embed("✅ 설정 완료", f"출석 보상: {금액:,}원", COLOR_OK))
 
 
 @settings_group.command(name="최소충전", description="한 번에 충전할 수 있는 최소 금액")
@@ -930,42 +930,42 @@ async def set_min(interaction: discord.Interaction, 금액: app_commands.Range[i
     await reply(interaction, embed("✅ 설정 완료", f"최소 충전: {금액:,}원", COLOR_OK))
 
 
-@settings_group.command(name="충전보너스", description="충전 시 추가로 주는 포인트 비율 (%)")
+@settings_group.command(name="충전보너스", description="충전 시 추가로 얹어 주는 비율 (%)")
 @admin_only()
 async def set_bonus(interaction: discord.Interaction, 퍼센트: app_commands.Range[int, 0, 100]):
     db.set_setting(interaction.guild_id, "charge_bonus", str(퍼센트))
     await reply(
         interaction,
-        embed("✅ 설정 완료", f"충전 보너스: {퍼센트}% (10,000원 → {points_for(interaction.guild_id, 10000):,} P)", COLOR_OK),
+        embed("✅ 설정 완료", f"충전 보너스: {퍼센트}% (10,000원 → {points_for(interaction.guild_id, 10000):,}원)", COLOR_OK),
     )
 
 
-@points_group.command(name="지급", description="유저에게 포인트를 지급해요")
+@points_group.command(name="지급", description="유저 잔액을 늘려요 (이벤트·보상)")
 @admin_only()
 async def pts_give(interaction: discord.Interaction, 유저: discord.Member,
-                   포인트: app_commands.Range[int, 1, 100_000_000], 사유: str = "관리자 지급"):
-    balance = db.add_points(interaction.guild_id, 유저.id, 포인트, f"{사유} (by {interaction.user.id})")
-    await reply(interaction, embed("✅ 지급 완료", f"{유저.mention}에게 {포인트:,} P 지급 → 잔액 {balance:,} P", COLOR_OK))
+                   금액: app_commands.Range[int, 1, 100_000_000], 사유: str = "관리자 지급"):
+    balance = db.add_points(interaction.guild_id, 유저.id, 금액, f"{사유} (by {interaction.user.id})")
+    await reply(interaction, embed("✅ 지급 완료", f"{유저.mention}에게 {금액:,}원 지급 → 잔액 {balance:,}원", COLOR_OK))
     await send_log(interaction.guild, embed(
-        "➕ 포인트 지급", f"{interaction.user.mention} → {유저.mention}: **{포인트:,} P**\n사유: {사유}"))
+        "➕ 잔액 지급", f"{interaction.user.mention} → {유저.mention}: **{금액:,}원**\n사유: {사유}"))
 
 
-@points_group.command(name="차감", description="유저의 포인트를 차감해요")
+@points_group.command(name="차감", description="유저 잔액을 줄여요")
 @admin_only()
 async def pts_take(interaction: discord.Interaction, 유저: discord.Member,
-                   포인트: app_commands.Range[int, 1, 100_000_000], 사유: str = "관리자 차감"):
+                   금액: app_commands.Range[int, 1, 100_000_000], 사유: str = "관리자 차감"):
     try:
-        balance = db.add_points(interaction.guild_id, 유저.id, -포인트, f"{사유} (by {interaction.user.id})")
+        balance = db.add_points(interaction.guild_id, 유저.id, -금액, f"{사유} (by {interaction.user.id})")
     except ShopError as exc:
         return await error(interaction, str(exc))
-    await reply(interaction, embed("✅ 차감 완료", f"{유저.mention}에게서 {포인트:,} P 차감 → 잔액 {balance:,} P", COLOR_OK))
+    await reply(interaction, embed("✅ 차감 완료", f"{유저.mention}에게서 {금액:,}원 차감 → 잔액 {balance:,}원", COLOR_OK))
     await send_log(interaction.guild, embed(
-        "➖ 포인트 차감", f"{interaction.user.mention} → {유저.mention}: **{포인트:,} P**\n사유: {사유}"))
+        "➖ 잔액 차감", f"{interaction.user.mention} → {유저.mention}: **{금액:,}원**\n사유: {사유}"))
 
 
 @product_group.command(name="추가", description="새 상품을 등록해요")
 @app_commands.describe(
-    이름="상품 이름", 가격="가격 (포인트)", 종류="판매 방식", 설명="상품 설명",
+    이름="상품 이름", 가격="가격 (원)", 종류="판매 방식", 설명="상품 설명",
     역할="종류가 '역할 지급'일 때 줄 역할",
 )
 @app_commands.choices(종류=[
@@ -985,7 +985,7 @@ async def prod_add(interaction: discord.Interaction, 이름: app_commands.Range[
         "stock": f"\n`/재고 추가 상품:{pid}`로 재고를 넣어 주세요.",
         "lifetime": "\n구매할 때마다 새 키가 자동으로 만들어져요. `/설정 평생역할`로 회원 역할도 정할 수 있어요.",
     }.get(종류.value, "")
-    await reply(interaction, embed("✅ 상품 등록", f"#{pid} **{이름}** — {가격:,} P ({종류.name}){hint}", COLOR_OK))
+    await reply(interaction, embed("✅ 상품 등록", f"#{pid} **{이름}** — {가격:,}원 ({종류.name}){hint}", COLOR_OK))
 
 
 @product_group.command(name="수정", description="상품 정보를 바꿔요")
@@ -1017,7 +1017,7 @@ async def prod_list(interaction: discord.Interaction):
     if not products:
         return await reply(interaction, embed("📦 상품 목록", "등록된 상품이 없어요."))
     lines = [
-        f"`#{p.id}` **{p.name}** — {p.price:,} P · {KIND_LABEL[p.kind]}"
+        f"`#{p.id}` **{p.name}** — {p.price:,}원 · {KIND_LABEL[p.kind]}"
         + (f" · 재고 {p.stock}" if p.kind == "stock" else "")
         + ("" if p.active else " · ~~판매 중지~~")
         for p in products
@@ -1066,7 +1066,7 @@ async def stock_clear(interaction: discord.Interaction, 상품: int):
     await reply(interaction, embed("✅ 재고 비우기", f"상품 #{상품}의 재고 {n}개를 지웠어요.", COLOR_OK))
 
 
-@order_group.command(name="환불", description="주문을 환불하고 포인트를 돌려줘요")
+@order_group.command(name="환불", description="주문을 환불하고 잔액으로 돌려줘요")
 @admin_only()
 async def order_refund(interaction: discord.Interaction, 주문번호: int):
     try:
@@ -1074,9 +1074,9 @@ async def order_refund(interaction: discord.Interaction, 주문번호: int):
     except ShopError as exc:
         return await error(interaction, str(exc))
     await after_refund(interaction.guild, order)
-    await reply(interaction, embed("✅ 환불 완료", f"주문 #{주문번호}: <@{order['user_id']}>에게 {order['price']:,} P 반환", COLOR_OK))
+    await reply(interaction, embed("✅ 환불 완료", f"주문 #{주문번호}: <@{order['user_id']}>에게 {order['price']:,}원 반환", COLOR_OK))
     await dm(order["user_id"], embed(
-        "↩️ 주문 환불", f"주문 #{주문번호} **{order['product_name']}**이(가) 환불되어 {order['price']:,} P를 돌려드렸어요.",
+        "↩️ 주문 환불", f"주문 #{주문번호} **{order['product_name']}**이(가) 환불되어 {order['price']:,}원을 돌려드렸어요.",
         COLOR_ERR))
 
 
@@ -1112,11 +1112,11 @@ async def dep_link(interaction: discord.Interaction, 입금번호: int, 유저: 
     except ShopError as exc:
         return await error(interaction, str(exc))
     await reply(interaction, embed(
-        "✅ 충전 완료", f"입금 #{입금번호} ({dep['depositor']}, {dep['amount']:,}원) → {유저.mention}에게 {points:,} P", COLOR_OK))
+        "✅ 충전 완료", f"입금 #{입금번호} ({dep['depositor']}, {dep['amount']:,}원) → {유저.mention}에게 {points:,}원", COLOR_OK))
     await dm(유저.id, embed(
-        "✅ 충전 완료", f"**{interaction.guild.name}**에서 **{points:,} P**가 충전됐어요!\n현재 잔액: **{balance:,} P**", COLOR_OK))
+        "✅ 충전 완료", f"**{interaction.guild.name}**에서 **{points:,}원**이 충전됐어요!\n현재 잔액: **{balance:,}원**", COLOR_OK))
     await send_log(interaction.guild, embed(
-        "🔗 입금 수동 연결", f"{interaction.user.mention}: 입금 #{입금번호} {dep['amount']:,}원 → {유저.mention} ({points:,} P)", COLOR_OK))
+        "🔗 입금 수동 연결", f"{interaction.user.mention}: 입금 #{입금번호} {dep['amount']:,}원 → {유저.mention} ({points:,}원)", COLOR_OK))
 
 
 @deposit_group.command(name="테스트", description="입금 알림 문자가 제대로 읽히는지 확인해요 (실제 충전 안 됨)")
@@ -1149,7 +1149,7 @@ async def life_grant(interaction: discord.Interaction, 유저: discord.Member):
     await set_lifetime_role(interaction.guild, 유저.id, give=True)
     await reply(interaction, embed("✅ 지급 완료", f"{유저.mention}님이 평생 무료 회원이 됐어요.", COLOR_OK))
     await dm(유저.id, embed(
-        "👑 평생 무료 회원", f"**{interaction.guild.name}**에서 평생 무료 회원이 됐어요! 모든 상품을 0 P로 구매할 수 있어요.",
+        "👑 평생 무료 회원", f"**{interaction.guild.name}**에서 평생 무료 회원이 됐어요! 모든 상품을 0원으로 구매할 수 있어요.",
         COLOR_OK))
     await send_log(interaction.guild, embed(
         "👑 평생 무료 회원 지급", f"{interaction.user.mention} → {유저.mention}", COLOR_OK))
@@ -1191,7 +1191,7 @@ def vault_embed(v: dict[str, int], title: str = "🏦 금고") -> discord.Embed:
     if v["unmatched_count"]:
         e.add_field(
             name="미확인 입금", value=f"{v['unmatched']:,}원 ({v['unmatched_count']}건)\n"
-            "아직 포인트가 지급되지 않아 출금 가능 금액에서 빠져 있어요.", inline=False)
+            "아직 잔액이 충전되지 않아 출금 가능 금액에서 빠져 있어요.", inline=False)
     e.set_footer(text="실제 돈은 입금 계좌에 있어요. 계좌에서 돈을 뺀 뒤 /금고 출금으로 기록하세요.")
     return e
 

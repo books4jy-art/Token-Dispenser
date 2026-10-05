@@ -190,7 +190,7 @@ class Database:
         row = Database._ensure_user(c, guild_id, user_id)
         new_balance = row["balance"] + delta
         if new_balance < 0:
-            raise ShopError(f"포인트가 부족해요. (보유: {row['balance']:,}P)")
+            raise ShopError(f"잔액이 부족해요. (보유: {row['balance']:,}원)")
         c.execute(
             "UPDATE users SET balance=? WHERE guild_id=? AND user_id=?",
             (new_balance, guild_id, user_id),
