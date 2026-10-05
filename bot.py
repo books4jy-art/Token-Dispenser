@@ -700,12 +700,20 @@ class ShopBot(discord.Client):
         for group in (settings_group, points_group, product_group, stock_group,
                       order_group, deposit_group, vault_group, lifetime_group):
             self.tree.add_command(group)
-        if DEV_GUILD_ID:
-            guild = discord.Object(DEV_GUILD_ID)
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-        else:
-            await self.tree.sync()
+        try:
+            if DEV_GUILD_ID:
+                guild = discord.Object(DEV_GUILD_ID)
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+            else:
+                await self.tree.sync()
+        except discord.Forbidden:
+            # Don't crash-loop: keep running so the webhook and buttons still work.
+            log.error(
+                "명령어를 등록하지 못했어요 (Missing Access). 봇을 서버에 초대할 때 "
+                "'bot'과 'applications.commands'를 모두 체크했는지, DEV_GUILD_ID가 "
+                "봇이 들어간 서버의 ID인지 확인한 뒤 봇을 재시작하세요."
+            )
 
         app = web.Application()
         app.router.add_get("/", health)
