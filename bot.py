@@ -34,6 +34,7 @@ except ImportError:
     pass
 
 import bank
+import catalog
 from db import Database, ShopError
 
 # ---------------------------------------------------------------- config ----
@@ -196,32 +197,79 @@ async def show_history(interaction: discord.Interaction) -> None:
     if not orders:
         return await reply(interaction, embed("🧾 구매 내역", "아직 구매한 상품이 없어요."))
     lines = [
-        f"`#{o['id']}` **{o['product_name']}** — {o['price']:,}원 · "
-        f"{STATUS_LABEL.get(o['status'], o['status'])} · {fmt_time(o['created_at'])}"
+        f"`#{o['id']}` **{o['product_name']}**"
+        + (f" × {o['quantity']}" if o["quantity"] > 1 else "")
+        + f" — {o['price']:,}원 · {STATUS_LABEL.get(o['status'], o['status'])} · {fmt_time(o['created_at'])}"
         for o in orders
     ]
     await reply(interaction, embed("🧾 최근 구매 내역", "\n".join(lines)))
+
+
+def kst_hour() -> int:
+    return datetime.datetime.now(KST).hour
+
+
+def price_label(p, price: int | None = None) -> str:
+    """'3,000원', '200원 / 200개', or crossed out for lifetime members."""
+    unit = f" / {p.unit}" if p.unit else ""
+    if price is not None and price != p.price:
+        return f"~~{p.price:,}원{unit}~~ 0원"
+    return f"{p.price:,}원{unit}"
+
+
+def product_note(p) -> str:
+    notes = [KIND_LABEL[p.kind]]
+    if p.kind == "stock":
+        notes.append(f"재고 {p.stock}개")
+    if p.sale_hours():
+        notes.append(f"판매 {p.sale_hours()}" + ("" if p.on_sale(kst_hour()) else " (지금은 판매 시간 아님)"))
+    return " · ".join(notes)
+
+
+def categories(products: list) -> list[str]:
+    seen: list[str] = []
+    for p in products:
+        if p.category not in seen:
+            seen.append(p.category)
+    return seen
 
 
 async def open_shop(interaction: discord.Interaction) -> None:
     products = db.list_products(interaction.guild_id)
     if not products:
         return await error(interaction, "아직 판매 중인 상품이 없어요.")
+    cats = categories(products)
+    if len(cats) == 1:
+        return await show_category(interaction, cats[0], edit=False)
     balance = db.get_user(interaction.guild_id, interaction.user.id)["balance"]
-    lifetime = db.is_lifetime(interaction.guild_id, interaction.user.id)
-    e = embed("🛒 상점", f"보유 잔액: **{balance:,}원**\n아래 메뉴에서 구매할 상품을 골라 주세요.")
-    if lifetime:
-        e.description += "\n👑 **평생 무료 회원**이라 모든 상품이 **0원**예요!"
-    for p in products[:25]:
-        stock = f" · 재고 {p.stock}개" if p.kind == "stock" else ""
+    e = embed("🛒 상점", f"보유 잔액: **{balance:,}원**\n아래 메뉴에서 분류를 골라 주세요.")
+    if db.is_lifetime(interaction.guild_id, interaction.user.id):
+        e.description += "\n👑 **평생 무료 회원**이라 모든 상품이 **0원**이에요!"
+    for cat in cats[:25]:
+        items = [p for p in products if p.category == cat]
+        cheapest = min(p.price for p in items)
+        e.add_field(name=f"📂 {cat}", value=f"상품 {len(items)}개 · {cheapest:,}원부터", inline=True)
+    await reply(interaction, e, CategoryView(cats))
+
+
+async def show_category(interaction: discord.Interaction, category: str, edit: bool = True) -> None:
+    products = [p for p in db.list_products(interaction.guild_id) if p.category == category][:25]
+    if not products:
+        return await error(interaction, "이 분류에 판매 중인 상품이 없어요.")
+    balance = db.get_user(interaction.guild_id, interaction.user.id)["balance"]
+    e = embed(f"🛒 {category}", f"보유 잔액: **{balance:,}원**\n아래 메뉴에서 구매할 상품을 골라 주세요.")
+    for p in products:
         price = db.price_for(interaction.guild_id, interaction.user.id, p)
-        price_text = f"~~{p.price:,}원~~ 0원" if price != p.price else f"{p.price:,}원"
         e.add_field(
-            name=f"#{p.id} {p.name} — {price_text}",
-            value=f"{p.description or '설명 없음'}\n`{KIND_LABEL[p.kind]}{stock}`",
+            name=f"{p.name} — {price_label(p, price)}",
+            value=(f"{p.description}\n" if p.description else "") + f"`{product_note(p)}`",
             inline=False,
         )
-    await reply(interaction, e, ShopView(products))
+    view = ShopView(products, back=len(categories(db.list_products(interaction.guild_id))) > 1)
+    if edit:
+        await interaction.response.edit_message(embed=e, view=view)
+    else:
+        await reply(interaction, e, view)
 
 
 async def open_charge(interaction: discord.Interaction) -> None:
@@ -231,15 +279,31 @@ async def open_charge(interaction: discord.Interaction) -> None:
 
 
 # ------------------------------------------------------------------- shop ---
+class CategoryView(discord.ui.View):
+    def __init__(self, cats: list[str]) -> None:
+        super().__init__(timeout=300)
+        select = discord.ui.Select(
+            placeholder="분류 선택",
+            options=[discord.SelectOption(label=c[:100], value=c[:100], emoji="📂") for c in cats[:25]],
+        )
+        select.callback = self.on_select
+        self.add_item(select)
+        self.select = select
+
+    async def on_select(self, interaction: discord.Interaction) -> None:
+        await show_category(interaction, self.select.values[0])
+
+
 class ShopView(discord.ui.View):
-    def __init__(self, products: list) -> None:
-        super().__init__(timeout=180)
+    def __init__(self, products: list, back: bool = False) -> None:
+        super().__init__(timeout=300)
         options = [
             discord.SelectOption(
-                label=f"{p.name}"[:100],
+                label=p.name[:100],
                 description=(
-                    f"{p.price:,}원 · " + ("품절" if p.kind == "stock" and p.stock == 0
-                                           else KIND_LABEL[p.kind])
+                    price_label(p).replace("~~", "")
+                    + (" · 품절" if p.kind == "stock" and p.stock == 0 else "")
+                    + (f" · {p.sale_hours()}" if p.sale_hours() else "")
                 )[:100],
                 value=str(p.id),
             )
@@ -249,35 +313,103 @@ class ShopView(discord.ui.View):
         select.callback = self.on_select
         self.add_item(select)
         self.select = select
+        if back:
+            button = discord.ui.Button(label="분류로 돌아가기", emoji="↩️", style=discord.ButtonStyle.secondary)
+            button.callback = self.on_back
+            self.add_item(button)
+
+    async def on_back(self, interaction: discord.Interaction) -> None:
+        products = db.list_products(interaction.guild_id)
+        cats = categories(products)
+        balance = db.get_user(interaction.guild_id, interaction.user.id)["balance"]
+        e = embed("🛒 상점", f"보유 잔액: **{balance:,}원**\n아래 메뉴에서 분류를 골라 주세요.")
+        for cat in cats[:25]:
+            items = [p for p in products if p.category == cat]
+            e.add_field(name=f"📂 {cat}", value=f"상품 {len(items)}개 · {min(p.price for p in items):,}원부터")
+        await interaction.response.edit_message(embed=e, view=CategoryView(cats))
 
     async def on_select(self, interaction: discord.Interaction) -> None:
         product = db.get_product(interaction.guild_id, int(self.select.values[0]))
         if product is None or not product.active:
             return await error(interaction, "판매 중인 상품이 아니에요.")
-        balance = db.get_user(interaction.guild_id, interaction.user.id)["balance"]
-        price = db.price_for(interaction.guild_id, interaction.user.id, product)
-        e = embed(
-            "🛍️ 구매 확인",
-            f"**{product.name}**을(를) **{price:,}원**에 구매할까요?"
-            + (" (👑 평생 무료 회원 혜택)" if price != product.price else "")
-            + f"\n\n보유 잔액: {balance:,}원 → 구매 후: {balance - price:,}원",
-            COLOR_WARN,
-        )
-        await interaction.response.send_message(
-            embed=e, view=ConfirmBuyView(product.id), ephemeral=True
-        )
+        if not product.on_sale(kst_hour()):
+            return await error(interaction, f"지금은 판매 시간이 아니에요. (판매 시간: {product.sale_hours()})")
+        if (product.unit and product.kind != "stock") or product.form is not None:
+            return await interaction.response.send_modal(OrderModal(product))
+        await confirm_purchase(interaction, product, 1, "")
+
+
+class OrderModal(discord.ui.Modal):
+    """Asks how many units, and the game codes / details the admin needs."""
+
+    def __init__(self, product) -> None:
+        super().__init__(title=product.name[:45])
+        self.product = product
+        self.qty = self.code = self.pin = self.detail = None
+        if product.unit and product.kind != "stock":
+            self.qty = discord.ui.TextInput(
+                label=f"수량 ({product.unit} 단위, 최대 {product.max_qty})"[:45],
+                placeholder=f"예: 1 → {product.unit}, 2 → {product.unit} × 2", default="1", max_length=4,
+            )
+            self.add_item(self.qty)
+        if product.form is not None:
+            self.code = discord.ui.TextInput(label="기종변경(이어하기) 코드", max_length=20)
+            self.pin = discord.ui.TextInput(label="인증번호", max_length=10)
+            self.add_item(self.code)
+            self.add_item(self.pin)
+            self.detail = discord.ui.TextInput(
+                label=(product.form or "요청사항 (선택)")[:45], style=discord.TextStyle.paragraph,
+                required=bool(product.form), max_length=500,
+            )
+            self.add_item(self.detail)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        quantity = 1
+        if self.qty is not None:
+            try:
+                quantity = int(str(self.qty.value).strip())
+            except ValueError:
+                return await error(interaction, "수량은 숫자로 입력해 주세요.")
+            if not 1 <= quantity <= self.product.max_qty:
+                return await error(interaction, f"수량은 1~{self.product.max_qty} 사이로 입력해 주세요.")
+        request = ""
+        if self.code is not None:
+            lines = [f"기종변경 코드: {str(self.code.value).strip()}", f"인증번호: {str(self.pin.value).strip()}"]
+            if str(self.detail.value).strip():
+                lines.append(f"{self.product.form or '요청사항'}: {str(self.detail.value).strip()}")
+            request = "\n".join(lines)
+        await confirm_purchase(interaction, self.product, quantity, request)
+
+
+async def confirm_purchase(interaction: discord.Interaction, product, quantity: int, request: str) -> None:
+    balance = db.get_user(interaction.guild_id, interaction.user.id)["balance"]
+    unit_price = db.price_for(interaction.guild_id, interaction.user.id, product)
+    price = unit_price * quantity
+    what = f"**{product.name}**" + (f" × {quantity} ({product.unit} 단위)" if product.unit else "")
+    e = embed(
+        "🛍️ 구매 확인",
+        f"{what}을(를) **{price:,}원**에 구매할까요?"
+        + (" (👑 평생 무료 회원 혜택)" if unit_price != product.price else "")
+        + f"\n\n보유 잔액: {balance:,}원 → 구매 후: {balance - price:,}원",
+        COLOR_WARN,
+    )
+    if request:
+        e.add_field(name="입력한 정보", value="코드와 요청 내용은 관리자에게만 전달돼요.", inline=False)
+    await interaction.response.send_message(
+        embed=e, view=ConfirmBuyView(product.id, quantity, request), ephemeral=True
+    )
 
 
 class ConfirmBuyView(discord.ui.View):
-    def __init__(self, product_id: int) -> None:
-        super().__init__(timeout=60)
-        self.product_id = product_id
+    def __init__(self, product_id: int, quantity: int = 1, request: str = "") -> None:
+        super().__init__(timeout=120)
+        self.product_id, self.quantity, self.request = product_id, quantity, request
 
     @discord.ui.button(label="구매하기", style=discord.ButtonStyle.success, emoji="✅")
     async def buy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         self.stop()
         await interaction.response.edit_message(view=None)
-        await purchase(interaction, self.product_id)
+        await purchase(interaction, self.product_id, self.quantity, self.request)
 
     @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -287,13 +419,14 @@ class ConfirmBuyView(discord.ui.View):
         )
 
 
-async def purchase(interaction: discord.Interaction, product_id: int) -> None:
+async def purchase(interaction: discord.Interaction, product_id: int, quantity: int = 1, request: str = "") -> None:
     guild = interaction.guild
     try:
-        result = db.purchase(guild.id, interaction.user.id, product_id)
+        result = db.purchase(guild.id, interaction.user.id, product_id, quantity, request, kst_hour())
     except ShopError as exc:
         return await error(interaction, str(exc))
     product = result.product
+    qty_text = f" × {result.quantity} ({product.unit} 단위)" if product.unit else ""
 
     if product.kind == "role":
         role = guild.get_role(product.role_id or 0)
@@ -309,7 +442,7 @@ async def purchase(interaction: discord.Interaction, product_id: int) -> None:
                 "(봇의 역할이 지급할 역할보다 위에 있어야 해요)",
             )
 
-    e = embed("🎉 구매 완료", f"**{product.name}** 구매가 완료됐어요!", COLOR_OK)
+    e = embed("🎉 구매 완료", f"**{product.name}**{qty_text} 구매가 완료됐어요!", COLOR_OK)
     e.add_field(name="주문 번호", value=f"#{result.order_id}")
     e.add_field(name="사용 금액", value=f"{result.price:,}원")
     e.add_field(name="남은 잔액", value=f"{result.balance:,}원")
@@ -344,10 +477,12 @@ async def purchase(interaction: discord.Interaction, product_id: int) -> None:
 
     log_e = embed("🛒 구매", color=COLOR_INFO)
     log_e.add_field(name="구매자", value=interaction.user.mention)
-    log_e.add_field(name="상품", value=f"#{product.id} {product.name}")
+    log_e.add_field(name="상품", value=f"#{product.id} {product.name}{qty_text}")
     log_e.add_field(
         name="가격", value=f"{result.price:,}원" + (" (평생 회원)" if result.price != product.price else "")
     )
+    if request:
+        log_e.add_field(name="요청 내용", value=f"```\n{request[:1000]}\n```", inline=False)
     log_e.set_footer(text=f"주문 #{result.order_id}")
     view = None
     if product.kind == "manual":
@@ -538,6 +673,10 @@ class OrderButton(
         e = interaction.message.embeds[0] if interaction.message.embeds else embed(text)
         e.title, e.color = text, color
         e.description = f"{interaction.user.mention}님이 처리했어요."
+        # The buyer's game codes don't need to stay in the log once the order is handled.
+        for i, field in reversed(list(enumerate(e.fields))):
+            if field.name == "요청 내용":
+                e.remove_field(i)
         await interaction.response.edit_message(embed=e, view=None)
         await dm(order["user_id"], embed(text, user_msg, color))
 
@@ -965,9 +1104,18 @@ async def pts_take(interaction: discord.Interaction, 유저: discord.Member,
 
 @product_group.command(name="추가", description="새 상품을 등록해요")
 @app_commands.describe(
-    이름="상품 이름", 가격="가격 (원)", 종류="판매 방식", 설명="상품 설명",
-    역할="종류가 '역할 지급'일 때 줄 역할",
+    이름="상품 이름", 가격="가격 (원, 단위가 있으면 1단위 가격)", 종류="판매 방식", 설명="상품 설명",
+    역할="종류가 '역할 지급'일 때 줄 역할", 분류="상점에서 묶어 보여 줄 분류 (예: 티켓)",
+    단위="단위별 판매일 때 1단위 (예: 200개, 1마리). 비우면 고정 상품",
+    최대수량="단위별 판매일 때 한 번에 살 수 있는 최대 단위 수",
+    판매시작="이 시각(0~23시)부터 판매", 판매종료="이 시각(0~23시)까지 판매",
+    주문양식="구매할 때 받을 정보", 추가입력="주문양식이 '코드 + 추가 입력'일 때 받을 내용 (예: 캐릭터 이름)",
 )
+@app_commands.choices(주문양식=[
+    app_commands.Choice(name="없음", value="none"),
+    app_commands.Choice(name="기종변경 코드 + 인증번호", value="codes"),
+    app_commands.Choice(name="코드 + 추가 입력", value="detail"),
+])
 @app_commands.choices(종류=[
     app_commands.Choice(name="자동 전송 (재고를 DM으로 보냄)", value="stock"),
     app_commands.Choice(name="역할 지급", value="role"),
@@ -977,10 +1125,23 @@ async def pts_take(interaction: discord.Interaction, 유저: discord.Member,
 @admin_only()
 async def prod_add(interaction: discord.Interaction, 이름: app_commands.Range[str, 1, 80],
                    가격: app_commands.Range[int, 0, 100_000_000], 종류: app_commands.Choice[str],
-                   설명: app_commands.Range[str, 0, 500] = "", 역할: discord.Role | None = None):
+                   설명: app_commands.Range[str, 0, 500] = "", 역할: discord.Role | None = None,
+                   분류: app_commands.Range[str, 1, 50] = "기타", 단위: app_commands.Range[str, 0, 20] = "",
+                   최대수량: app_commands.Range[int, 1, 9999] = 99,
+                   판매시작: app_commands.Range[int, 0, 23] | None = None,
+                   판매종료: app_commands.Range[int, 0, 23] | None = None,
+                   주문양식: app_commands.Choice[str] | None = None,
+                   추가입력: app_commands.Range[str, 1, 45] | None = None):
     if 종류.value == "role" and 역할 is None:
         return await error(interaction, "역할 지급 상품은 `역할`을 꼭 정해 주세요.")
-    pid = db.add_product(interaction.guild_id, 이름, 가격, 설명, 종류.value, 역할.id if 역할 else None)
+    if (판매시작 is None) != (판매종료 is None):
+        return await error(interaction, "판매시작과 판매종료는 함께 정해 주세요.")
+    form = {"codes": "", "detail": 추가입력 or "요청 내용"}.get(주문양식.value if 주문양식 else "none")
+    pid = db.add_product(
+        interaction.guild_id, 이름, 가격, 설명, 종류.value, 역할.id if 역할 else None,
+        category=분류, unit=단위.strip(), max_qty=최대수량 if 단위.strip() else 1,
+        sale_start=판매시작, sale_end=판매종료, form=form,
+    )
     hint = {
         "stock": f"\n`/재고 추가 상품:{pid}`로 재고를 넣어 주세요.",
         "lifetime": "\n구매할 때마다 새 키가 자동으로 만들어져요. `/설정 평생역할`로 회원 역할도 정할 수 있어요.",
@@ -991,11 +1152,22 @@ async def prod_add(interaction: discord.Interaction, 이름: app_commands.Range[
 @product_group.command(name="수정", description="상품 정보를 바꿔요")
 @app_commands.autocomplete(상품=product_autocomplete)
 @admin_only()
+@app_commands.describe(
+    판매시작="이 시각(0~23시)부터 판매, -1이면 시간 제한 없앰", 판매종료="이 시각(0~23시)까지 판매, -1이면 없앰",
+    단위="1단위 (예: 200개). '없음'이면 고정 상품", 최대수량="한 번에 살 수 있는 최대 단위 수",
+)
 async def prod_edit(interaction: discord.Interaction, 상품: int, 이름: str | None = None,
                     가격: app_commands.Range[int, 0, 100_000_000] | None = None,
-                    설명: str | None = None, 판매중: bool | None = None):
+                    설명: str | None = None, 판매중: bool | None = None,
+                    분류: app_commands.Range[str, 1, 50] | None = None,
+                    단위: app_commands.Range[str, 1, 20] | None = None,
+                    최대수량: app_commands.Range[int, 1, 9999] | None = None,
+                    판매시작: app_commands.Range[int, -1, 23] | None = None,
+                    판매종료: app_commands.Range[int, -1, 23] | None = None):
     ok = db.update_product(interaction.guild_id, 상품, name=이름, price=가격, description=설명,
-                           active=None if 판매중 is None else int(판매중))
+                           active=None if 판매중 is None else int(판매중), category=분류,
+                           unit=None if 단위 is None else ("" if 단위.strip() == "없음" else 단위.strip()),
+                           max_qty=최대수량, sale_start=판매시작, sale_end=판매종료)
     if not ok:
         return await error(interaction, "바꿀 내용이 없거나 존재하지 않는 상품이에요.")
     await reply(interaction, embed("✅ 상품 수정 완료", f"상품 #{상품}", COLOR_OK))
@@ -1016,13 +1188,30 @@ async def prod_list(interaction: discord.Interaction):
     products = db.list_products(interaction.guild_id, include_inactive=True)
     if not products:
         return await reply(interaction, embed("📦 상품 목록", "등록된 상품이 없어요."))
-    lines = [
-        f"`#{p.id}` **{p.name}** — {p.price:,}원 · {KIND_LABEL[p.kind]}"
-        + (f" · 재고 {p.stock}" if p.kind == "stock" else "")
-        + ("" if p.active else " · ~~판매 중지~~")
-        for p in products
-    ]
+    lines: list[str] = []
+    for cat in categories(products):
+        lines.append(f"**📂 {cat}**")
+        lines += [
+            f"`#{p.id}` {p.name} — {price_label(p)}"
+            + (f" (최대 {p.max_qty})" if p.unit else "")
+            + (f" · {p.sale_hours()}" if p.sale_hours() else "")
+            + (f" · 재고 {p.stock}" if p.kind == "stock" else "")
+            + ("" if p.active else " · ~~판매 중지~~")
+            for p in products if p.category == cat
+        ]
     await reply(interaction, embed("📦 상품 목록", "\n".join(lines)[:4000]))
+
+
+@product_group.command(name="기본목록", description="냥코 서비스 상품 목록을 한 번에 등록해요 (이미 있는 이름은 건너뜀)")
+@admin_only()
+async def prod_catalog(interaction: discord.Interaction):
+    added, skipped = db.add_catalog(interaction.guild_id, catalog.CATALOG)
+    await reply(interaction, embed(
+        "✅ 기본 상품 등록",
+        f"{added}개를 등록했어요." + (f" (이미 있는 {skipped}개는 건너뜀)" if skipped else "")
+        + "\n`/상품 목록`으로 확인하고, `/상품 수정`으로 가격·수량을 바꿀 수 있어요.",
+        COLOR_OK,
+    ))
 
 
 class StockModal(discord.ui.Modal, title="재고 추가"):

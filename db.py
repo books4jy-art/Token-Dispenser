@@ -115,6 +115,25 @@ CREATE TABLE IF NOT EXISTS ledger (
 """
 
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS won't add them to a
+# database that already exists, so they are added here one by one if missing.
+MIGRATIONS = {
+    "products": {
+        "category": "TEXT NOT NULL DEFAULT '기타'",
+        "unit": "TEXT NOT NULL DEFAULT ''",          # '' = fixed item, else e.g. '200개' (price is per unit)
+        "max_qty": "INTEGER NOT NULL DEFAULT 1",
+        "sale_start": "INTEGER",                      # KST hour the item goes on sale (NULL = always)
+        "sale_end": "INTEGER",                        # KST hour it stops (exclusive)
+        "form": "TEXT",                               # NULL = no order form, '' = game codes only,
+                                                      # other text = codes + a required field with that label
+    },
+    "orders": {
+        "quantity": "INTEGER NOT NULL DEFAULT 1",
+        "request": "TEXT NOT NULL DEFAULT ''",        # what the buyer filled in (game codes etc.)
+    },
+}
+
+
 class ShopError(Exception):
     """A purchase/charge problem whose message is shown to the user as-is."""
 
@@ -130,6 +149,25 @@ class Product:
     role_id: int | None
     active: bool
     stock: int  # remaining stock items (only meaningful for kind == 'stock')
+    category: str = "기타"
+    unit: str = ""
+    max_qty: int = 1
+    sale_start: int | None = None
+    sale_end: int | None = None
+    form: str | None = None
+
+    def on_sale(self, hour: int) -> bool:
+        """Whether the item can be bought at this KST hour (0–23)."""
+        if self.sale_start is None or self.sale_end is None or self.sale_start == self.sale_end:
+            return True
+        if self.sale_start < self.sale_end:
+            return self.sale_start <= hour < self.sale_end
+        return hour >= self.sale_start or hour < self.sale_end  # window past midnight, e.g. 22~4
+
+    def sale_hours(self) -> str:
+        if self.sale_start is None or self.sale_end is None or self.sale_start == self.sale_end:
+            return ""
+        return f"{self.sale_start:02d}:00~{self.sale_end:02d}:00"
 
 
 @dataclass
@@ -138,7 +176,8 @@ class Purchase:
     product: Product
     delivered: str
     balance: int
-    price: int  # what was actually paid (0 for lifetime members)
+    price: int  # what was actually paid in total (0 for lifetime members)
+    quantity: int = 1
 
 
 class Database:
@@ -147,6 +186,11 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(SCHEMA)
+        for table, columns in MIGRATIONS.items():
+            have = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+            for name, decl in columns.items():
+                if name not in have:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
         self._lock = threading.Lock()
 
     @contextmanager
@@ -240,7 +284,9 @@ class Database:
         return Product(
             id=row["id"], guild_id=row["guild_id"], name=row["name"], price=row["price"],
             description=row["description"], kind=row["kind"], role_id=row["role_id"],
-            active=bool(row["active"]), stock=row["stock_count"],
+            active=bool(row["active"]), stock=row["stock_count"], category=row["category"],
+            unit=row["unit"], max_qty=row["max_qty"], sale_start=row["sale_start"],
+            sale_end=row["sale_end"], form=row["form"],
         )
 
     def get_product(self, guild_id: int, product_id: int) -> Product | None:
@@ -255,19 +301,58 @@ class Database:
 
     def add_product(
         self, guild_id: int, name: str, price: int, description: str, kind: str,
-        role_id: int | None = None,
+        role_id: int | None = None, category: str = "기타", unit: str = "", max_qty: int = 1,
+        sale_start: int | None = None, sale_end: int | None = None, form: str | None = None,
     ) -> int:
         with self._tx() as c:
-            cur = c.execute(
-                "INSERT INTO products (guild_id, name, price, description, kind, role_id) "
-                "VALUES (?,?,?,?,?,?)",
-                (guild_id, name, price, description, kind, role_id),
+            return self._insert_product(
+                c, guild_id, name, price, description, kind, role_id, category, unit,
+                max_qty, sale_start, sale_end, form,
             )
-            return cur.lastrowid
+
+    @staticmethod
+    def _insert_product(c: sqlite3.Connection, guild_id: int, name: str, price: int,
+                        description: str, kind: str, role_id: int | None, category: str,
+                        unit: str, max_qty: int, sale_start: int | None, sale_end: int | None,
+                        form: str | None) -> int:
+        cur = c.execute(
+            "INSERT INTO products (guild_id, name, price, description, kind, role_id, category, "
+            "unit, max_qty, sale_start, sale_end, form) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (guild_id, name, price, description, kind, role_id, category, unit,
+             max(1, max_qty), sale_start, sale_end, form),
+        )
+        return cur.lastrowid
+
+    def add_catalog(self, guild_id: int, items: list[dict]) -> tuple[int, int]:
+        """Add catalog items, skipping names already on sale. Returns (added, skipped)."""
+        added = skipped = 0
+        with self._tx() as c:
+            existing = {
+                r["name"] for r in c.execute(
+                    "SELECT name FROM products WHERE guild_id=? AND active=1", (guild_id,)
+                )
+            }
+            for item in items:
+                if item["name"] in existing:
+                    skipped += 1
+                    continue
+                self._insert_product(
+                    c, guild_id, item["name"], item["price"], item.get("description", ""),
+                    item.get("kind", "manual"), None, item.get("category", "기타"),
+                    item.get("unit", ""), item.get("max_qty", 1), item.get("sale_start"),
+                    item.get("sale_end"), item.get("form"),
+                )
+                added += 1
+        return added, skipped
 
     def update_product(self, guild_id: int, product_id: int, **fields: object) -> bool:
-        allowed = {"name", "price", "description", "active"}
+        """Change product fields. None = leave as is; -1 for sale_start/sale_end clears them."""
+        allowed = {"name", "price", "description", "active", "category", "unit", "max_qty",
+                   "sale_start", "sale_end"}
         fields = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        for k in ("sale_start", "sale_end"):
+            if fields.get(k) == -1:
+                fields[k] = None
         if not fields:
             return False
         sets = ", ".join(f"{k}=?" for k in fields)
@@ -296,11 +381,19 @@ class Database:
             return c.execute("DELETE FROM stock WHERE product_id=?", (product_id,)).rowcount
 
     # ------------------------------------------------------------ purchase --
-    def purchase(self, guild_id: int, user_id: int, product_id: int) -> Purchase:
+    def purchase(
+        self, guild_id: int, user_id: int, product_id: int, quantity: int = 1,
+        request: str = "", hour: int | None = None,
+    ) -> Purchase:
         with self._tx() as c:
             product = self._product(c, product_id, guild_id)
             if product is None or not product.active:
                 raise ShopError("판매 중인 상품이 아니에요.")
+            if hour is not None and not product.on_sale(hour):
+                raise ShopError(f"지금은 판매 시간이 아니에요. (판매 시간: {product.sale_hours()})")
+            max_qty = product.max_qty if product.unit and product.kind != "stock" else 1
+            if not 1 <= quantity <= max_qty:
+                raise ShopError(f"수량은 1~{max_qty} 사이로 입력해 주세요.")
             delivered = ""
             status = "done"
             if product.kind == "stock":
@@ -316,21 +409,21 @@ class Database:
                 status = "pending"
             elif product.kind == "lifetime":
                 delivered = self._new_key(c, guild_id, user_id)
-            price = self._price_for(c, guild_id, user_id, product)
-            balance = self._add(c, guild_id, user_id, -price, f"구매: {product.name}")
+            price = self._price_for(c, guild_id, user_id, product) * quantity
+            balance = self._add(c, guild_id, user_id, -price, f"구매: {product.name} x{quantity}")
             c.execute(
                 "UPDATE users SET total_spent=total_spent+? WHERE guild_id=? AND user_id=?",
                 (price, guild_id, user_id),
             )
             cur = c.execute(
                 "INSERT INTO orders (guild_id, user_id, product_id, product_name, price, "
-                "delivered, status, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                "delivered, status, created_at, quantity, request) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (guild_id, user_id, product.id, product.name, price, delivered,
-                 status, int(time.time())),
+                 status, int(time.time()), quantity, request),
             )
             if product.kind == "lifetime":
                 c.execute("UPDATE lifetime_keys SET order_id=? WHERE key=?", (cur.lastrowid, delivered))
-            return Purchase(cur.lastrowid, product, delivered, balance, price)
+            return Purchase(cur.lastrowid, product, delivered, balance, price, quantity)
 
     def refund_order(self, guild_id: int, order_id: int) -> sqlite3.Row:
         with self._tx() as c:
@@ -352,7 +445,7 @@ class Database:
                 "UPDATE users SET total_spent=MAX(total_spent-?, 0) WHERE guild_id=? AND user_id=?",
                 (order["price"], guild_id, order["user_id"]),
             )
-            c.execute("UPDATE orders SET status='refunded' WHERE id=?", (order_id,))
+            c.execute("UPDATE orders SET status='refunded', request='' WHERE id=?", (order_id,))
             return order
 
     def complete_order(self, guild_id: int, order_id: int) -> sqlite3.Row:
@@ -362,7 +455,8 @@ class Database:
             ).fetchone()
             if order is None or order["status"] != "pending":
                 raise ShopError("처리 대기 중인 주문이 아니에요.")
-            c.execute("UPDATE orders SET status='done' WHERE id=?", (order_id,))
+            # The buyer's game codes aren't needed once the order is done.
+            c.execute("UPDATE orders SET status='done', request='' WHERE id=?", (order_id,))
             return order
 
     def recent_orders(self, guild_id: int, user_id: int, limit: int = 10) -> list[sqlite3.Row]:
