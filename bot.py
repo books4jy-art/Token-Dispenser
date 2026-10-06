@@ -335,6 +335,11 @@ class ShopView(discord.ui.View):
         if not product.on_sale(kst_hour()):
             return await error(interaction, f"지금은 판매 시간이 아니에요. (판매 시간: {product.sale_hours()})")
         if (product.unit and product.kind != "stock") or product.form is not None:
+            # Check the balance covers at least one unit before asking for codes and details.
+            balance = db.get_user(interaction.guild_id, interaction.user.id)["balance"]
+            unit_price = db.price_for(interaction.guild_id, interaction.user.id, product)
+            if balance < unit_price:
+                return await confirm_purchase(interaction, product, 1, "")
             return await interaction.response.send_modal(OrderModal(product))
         await confirm_purchase(interaction, product, 1, "")
 
