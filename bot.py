@@ -393,11 +393,28 @@ async def confirm_purchase(interaction: discord.Interaction, product, quantity: 
         + f"\n\n보유 잔액: {balance:,}원 → 구매 후: {balance - price:,}원",
         COLOR_WARN,
     )
+    if balance < price:
+        e = embed(
+            "💳 잔액이 부족해요",
+            f"{what}은(는) **{price:,}원**이에요.\n\n보유 잔액: {balance:,}원 · "
+            f"**{price - balance:,}원**이 더 필요해요.\n충전한 뒤 다시 구매해 주세요.",
+            COLOR_ERR,
+        )
+        return await interaction.response.send_message(embed=e, view=ChargeButtonView(), ephemeral=True)
     if request:
         e.add_field(name="입력한 정보", value="코드와 요청 내용은 관리자에게만 전달돼요.", inline=False)
     await interaction.response.send_message(
         embed=e, view=ConfirmBuyView(product.id, quantity, request), ephemeral=True
     )
+
+
+class ChargeButtonView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+
+    @discord.ui.button(label="충전하기", emoji="💳", style=discord.ButtonStyle.success)
+    async def charge(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await open_charge(interaction)
 
 
 class ConfirmBuyView(discord.ui.View):
