@@ -10,7 +10,15 @@ echo "▶ 패키지 설치"
 sudo apt-get update -q
 sudo apt-get install -y -q python3 python3-venv curl
 
-echo "▶ 파이썬 가상환경 + 라이브러리 설치"
+# The save editor needs more memory than the 1GB free server has to spare: add 2GB of swap once.
+if [ "$(swapon --show | wc -l)" -eq 0 ]; then
+    echo "▶ 스왑 메모리 2GB 추가"
+    sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+    sudo mkswap /swapfile > /dev/null && sudo swapon /swapfile
+    grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab > /dev/null
+fi
+
+echo "▶ 파이썬 가상환경 + 라이브러리 설치 (편집기 포함, 몇 분 걸려요)"
 python3 -m venv .venv
 .venv/bin/pip install -q --upgrade pip
 .venv/bin/pip install -q -r requirements.txt

@@ -126,10 +126,15 @@ MIGRATIONS = {
         "sale_end": "INTEGER",                        # KST hour it stops (exclusive)
         "form": "TEXT",                               # NULL = no order form, '' = game codes only,
                                                       # other text = codes + a required field with that label
+        "auto": "TEXT",                               # fulfil.AUTO key: the bot edits the save itself
     },
     "orders": {
         "quantity": "INTEGER NOT NULL DEFAULT 1",
         "request": "TEXT NOT NULL DEFAULT ''",        # what the buyer filled in (game codes etc.)
+        "job": "TEXT NOT NULL DEFAULT ''",            # JSON for an automatic edit (holds the game codes)
+        "job_state": "TEXT NOT NULL DEFAULT ''",      # '' | queued | running | done | failed | interrupted
+        "log_channel_id": "INTEGER",
+        "log_message_id": "INTEGER",
     },
 }
 
@@ -155,6 +160,7 @@ class Product:
     sale_start: int | None = None
     sale_end: int | None = None
     form: str | None = None
+    auto: str | None = None
 
     def on_sale(self, hour: int) -> bool:
         """Whether the item can be bought at this KST hour (0–23)."""
@@ -286,7 +292,7 @@ class Database:
             description=row["description"], kind=row["kind"], role_id=row["role_id"],
             active=bool(row["active"]), stock=row["stock_count"], category=row["category"],
             unit=row["unit"], max_qty=row["max_qty"], sale_start=row["sale_start"],
-            sale_end=row["sale_end"], form=row["form"],
+            sale_end=row["sale_end"], form=row["form"], auto=row["auto"],
         )
 
     def get_product(self, guild_id: int, product_id: int) -> Product | None:
@@ -314,12 +320,12 @@ class Database:
     def _insert_product(c: sqlite3.Connection, guild_id: int, name: str, price: int,
                         description: str, kind: str, role_id: int | None, category: str,
                         unit: str, max_qty: int, sale_start: int | None, sale_end: int | None,
-                        form: str | None) -> int:
+                        form: str | None, auto: str | None = None) -> int:
         cur = c.execute(
             "INSERT INTO products (guild_id, name, price, description, kind, role_id, category, "
-            "unit, max_qty, sale_start, sale_end, form) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "unit, max_qty, sale_start, sale_end, form, auto) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (guild_id, name, price, description, kind, role_id, category, unit,
-             max(1, max_qty), sale_start, sale_end, form),
+             max(1, max_qty), sale_start, sale_end, form, auto),
         )
         return cur.lastrowid
 
@@ -334,13 +340,22 @@ class Database:
             }
             for item in items:
                 if item["name"] in existing:
+                    # Keep the admin's price, category and description; refresh how it's sold.
+                    c.execute(
+                        "UPDATE products SET auto=?, unit=?, max_qty=?, form=?, sale_start=?, sale_end=?, "
+                        "description=CASE WHEN description='' THEN ? ELSE description END "
+                        "WHERE guild_id=? AND name=? AND active=1",
+                        (item.get("auto"), item.get("unit", ""), max(1, item.get("max_qty", 1)),
+                         item.get("form"), item.get("sale_start"), item.get("sale_end"),
+                         item.get("description", ""), guild_id, item["name"]),
+                    )
                     skipped += 1
                     continue
                 self._insert_product(
                     c, guild_id, item["name"], item["price"], item.get("description", ""),
                     item.get("kind", "manual"), None, item.get("category", "기타"),
                     item.get("unit", ""), item.get("max_qty", 1), item.get("sale_start"),
-                    item.get("sale_end"), item.get("form"),
+                    item.get("sale_end"), item.get("form"), item.get("auto"),
                 )
                 added += 1
         return added, skipped
@@ -383,7 +398,7 @@ class Database:
     # ------------------------------------------------------------ purchase --
     def purchase(
         self, guild_id: int, user_id: int, product_id: int, quantity: int = 1,
-        request: str = "", hour: int | None = None,
+        request: str = "", hour: int | None = None, job: str = "",
     ) -> Purchase:
         with self._tx() as c:
             product = self._product(c, product_id, guild_id)
@@ -417,9 +432,10 @@ class Database:
             )
             cur = c.execute(
                 "INSERT INTO orders (guild_id, user_id, product_id, product_name, price, "
-                "delivered, status, created_at, quantity, request) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "delivered, status, created_at, quantity, request, job, job_state) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (guild_id, user_id, product.id, product.name, price, delivered,
-                 status, int(time.time()), quantity, request),
+                 status, int(time.time()), quantity, request, job, "queued" if job else ""),
             )
             if product.kind == "lifetime":
                 c.execute("UPDATE lifetime_keys SET order_id=? WHERE key=?", (cur.lastrowid, delivered))
@@ -445,7 +461,7 @@ class Database:
                 "UPDATE users SET total_spent=MAX(total_spent-?, 0) WHERE guild_id=? AND user_id=?",
                 (order["price"], guild_id, order["user_id"]),
             )
-            c.execute("UPDATE orders SET status='refunded', request='' WHERE id=?", (order_id,))
+            c.execute("UPDATE orders SET status='refunded', request='', job='' WHERE id=?", (order_id,))
             return order
 
     def complete_order(self, guild_id: int, order_id: int) -> sqlite3.Row:
@@ -456,8 +472,30 @@ class Database:
             if order is None or order["status"] != "pending":
                 raise ShopError("처리 대기 중인 주문이 아니에요.")
             # The buyer's game codes aren't needed once the order is done.
-            c.execute("UPDATE orders SET status='done', request='' WHERE id=?", (order_id,))
+            c.execute("UPDATE orders SET status='done', request='', job='' WHERE id=?", (order_id,))
             return order
+
+    def get_order(self, order_id: int) -> sqlite3.Row | None:
+        return self._conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+
+    def set_order_log(self, order_id: int, channel_id: int, message_id: int) -> None:
+        with self._tx() as c:
+            c.execute("UPDATE orders SET log_channel_id=?, log_message_id=? WHERE id=?",
+                      (channel_id, message_id, order_id))
+
+    def set_job_state(self, order_id: int, state: str, wipe: bool = False) -> None:
+        """Track an automatic edit. wipe=True also drops the game codes once they're used."""
+        with self._tx() as c:
+            if wipe:
+                c.execute("UPDATE orders SET job_state=?, job='', request='' WHERE id=?", (state, order_id))
+            else:
+                c.execute("UPDATE orders SET job_state=? WHERE id=?", (state, order_id))
+
+    def jobs_in_state(self, *states: str) -> list[sqlite3.Row]:
+        marks = ",".join("?" * len(states))
+        return self._conn.execute(
+            f"SELECT * FROM orders WHERE status='pending' AND job_state IN ({marks}) ORDER BY id", states
+        ).fetchall()
 
     def recent_orders(self, guild_id: int, user_id: int, limit: int = 10) -> list[sqlite3.Row]:
         return self._conn.execute(

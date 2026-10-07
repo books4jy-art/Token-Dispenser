@@ -13,6 +13,7 @@ Run:  python bot.py   (settings come from .env — see .env.example)
 """
 from __future__ import annotations
 
+import asyncio
 import datetime
 import hashlib
 import hmac
@@ -35,6 +36,7 @@ except ImportError:
 
 import bank
 import catalog
+import fulfil
 from db import Database, ShopError
 
 # ---------------------------------------------------------------- config ----
@@ -65,6 +67,7 @@ STATUS_LABEL = {"done": "완료", "pending": "처리 대기", "refunded": "환�
 
 log = logging.getLogger("shopbot")
 db = Database(DB_PATH)
+cat_names = fulfil.CatNames()
 
 
 # --------------------------------------------------------------- helpers ----
@@ -351,7 +354,9 @@ class OrderModal(discord.ui.Modal):
         super().__init__(title=product.name[:45])
         self.product = product
         self.qty = self.code = self.pin = self.detail = None
-        if product.unit and product.kind != "stock":
+        self.mode = fulfil.quantity_mode(product.auto)
+        # Character and treasure items count the names / chapters typed instead.
+        if product.unit and product.kind != "stock" and self.mode not in ("cats", "chapters"):
             self.qty = discord.ui.TextInput(
                 label=f"수량 ({product.unit} 단위, 최대 {product.max_qty})"[:45],
                 placeholder=f"예: 1 → {product.unit}, 2 → {product.unit} × 2", default="1", max_length=4,
@@ -362,6 +367,8 @@ class OrderModal(discord.ui.Modal):
             self.pin = discord.ui.TextInput(label="인증번호", max_length=10)
             self.add_item(self.code)
             self.add_item(self.pin)
+        # Automatic items only take details they can act on (character names, chapters).
+        if product.form is not None and (self.mode is None or self.mode in ("cats", "chapters")):
             self.detail = discord.ui.TextInput(
                 label=(product.form or "요청사항 (선택)")[:45], style=discord.TextStyle.paragraph,
                 required=bool(product.form), max_length=500,
@@ -377,16 +384,38 @@ class OrderModal(discord.ui.Modal):
                 return await error(interaction, "수량은 숫자로 입력해 주세요.")
             if not 1 <= quantity <= self.product.max_qty:
                 return await error(interaction, f"수량은 1~{self.product.max_qty} 사이로 입력해 주세요.")
-        request = ""
-        if self.code is not None:
+        request, job = "", None
+        detail = str(self.detail.value).strip() if self.detail is not None else ""
+        if self.code is not None and self.mode is not None:
+            # Automatic: the codes go only into the job (never into the admin log).
+            picks: list[int] = []
+            if self.mode in ("cats", "chapters"):
+                if self.mode == "cats":
+                    picks, problem = cat_names.resolve(detail)
+                    shown = ", ".join(f"{cat_names.name(i)} (#{i})" for i in picks)
+                else:
+                    picks, problem = fulfil.parse_chapters(detail)
+                    shown = fulfil.chapter_names(picks)
+                if problem:
+                    return await error(interaction, problem)
+                if len(picks) > self.product.max_qty:
+                    return await error(interaction, f"한 번에 최대 {self.product.max_qty}{self.product.unit[1:] or '개'}까지 주문할 수 있어요.")
+                quantity = len(picks)
+                request = f"{self.product.form}: {shown}"
+            elif detail:
+                request = f"요청사항: {detail}"
+            job = {"auto": self.product.auto, "quantity": quantity, "picks": picks,
+                   "code": str(self.code.value).strip(), "pin": str(self.pin.value).strip()}
+        elif self.code is not None:
             lines = [f"기종변경 코드: {str(self.code.value).strip()}", f"인증번호: {str(self.pin.value).strip()}"]
-            if str(self.detail.value).strip():
-                lines.append(f"{self.product.form or '요청사항'}: {str(self.detail.value).strip()}")
+            if detail:
+                lines.append(f"{self.product.form or '요청사항'}: {detail}")
             request = "\n".join(lines)
-        await confirm_purchase(interaction, self.product, quantity, request)
+        await confirm_purchase(interaction, self.product, quantity, request, job)
 
 
-async def confirm_purchase(interaction: discord.Interaction, product, quantity: int, request: str) -> None:
+async def confirm_purchase(interaction: discord.Interaction, product, quantity: int, request: str,
+                           job: dict | None = None) -> None:
     balance = db.get_user(interaction.guild_id, interaction.user.id)["balance"]
     unit_price = db.price_for(interaction.guild_id, interaction.user.id, product)
     price = unit_price * quantity
@@ -406,10 +435,19 @@ async def confirm_purchase(interaction: discord.Interaction, product, quantity: 
             COLOR_ERR,
         )
         return await interaction.response.send_message(embed=e, view=ChargeButtonView(), ephemeral=True)
-    if request:
+    if job is not None:
+        if request:
+            e.add_field(name="주문 내용", value=request[:1000], inline=False)
+        e.add_field(
+            name="🤖 자동 처리",
+            value="구매하면 봇이 바로 세이브를 수정해요 (1~3분).\n입력한 이어하기 코드는 사용되고, "
+                  "**새 이어하기 코드와 인증번호를 DM으로** 보내 드려요. 서버 멤버의 DM을 허용해 주세요.",
+            inline=False,
+        )
+    elif request:
         e.add_field(name="입력한 정보", value="코드와 요청 내용은 관리자에게만 전달돼요.", inline=False)
     await interaction.response.send_message(
-        embed=e, view=ConfirmBuyView(product.id, quantity, request), ephemeral=True
+        embed=e, view=ConfirmBuyView(product.id, quantity, request, job), ephemeral=True
     )
 
 
@@ -423,15 +461,15 @@ class ChargeButtonView(discord.ui.View):
 
 
 class ConfirmBuyView(discord.ui.View):
-    def __init__(self, product_id: int, quantity: int = 1, request: str = "") -> None:
+    def __init__(self, product_id: int, quantity: int = 1, request: str = "", job: dict | None = None) -> None:
         super().__init__(timeout=120)
-        self.product_id, self.quantity, self.request = product_id, quantity, request
+        self.product_id, self.quantity, self.request, self.job = product_id, quantity, request, job
 
     @discord.ui.button(label="구매하기", style=discord.ButtonStyle.success, emoji="✅")
     async def buy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         self.stop()
         await interaction.response.edit_message(view=None)
-        await purchase(interaction, self.product_id, self.quantity, self.request)
+        await purchase(interaction, self.product_id, self.quantity, self.request, self.job)
 
     @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -441,10 +479,12 @@ class ConfirmBuyView(discord.ui.View):
         )
 
 
-async def purchase(interaction: discord.Interaction, product_id: int, quantity: int = 1, request: str = "") -> None:
+async def purchase(interaction: discord.Interaction, product_id: int, quantity: int = 1, request: str = "",
+                   job: dict | None = None) -> None:
     guild = interaction.guild
     try:
-        result = db.purchase(guild.id, interaction.user.id, product_id, quantity, request, kst_hour())
+        result = db.purchase(guild.id, interaction.user.id, product_id, quantity, request, kst_hour(),
+                             json.dumps(job) if job else "")
     except ShopError as exc:
         return await error(interaction, str(exc))
     product = result.product
@@ -491,6 +531,13 @@ async def purchase(interaction: discord.Interaction, product_id: int, quantity: 
         )
         dm_embed.set_footer(text=f"{guild.name} · 주문 #{result.order_id}")
         await dm(interaction.user.id, dm_embed)
+    elif job:
+        e.add_field(
+            name="🤖 자동 처리 중",
+            value="세이브를 수정하고 있어요. 보통 1~3분 걸려요.\n끝나면 **새 이어하기 코드와 인증번호를 DM으로** 보내 드려요.\n"
+                  "그 전까지 게임에서 이어하기를 하지 마세요.",
+            inline=False,
+        )
     else:
         e.add_field(
             name="안내", value="관리자가 확인 후 처리해 드릴 거예요. 잠시만 기다려 주세요!", inline=False
@@ -508,12 +555,163 @@ async def purchase(interaction: discord.Interaction, product_id: int, quantity: 
     log_e.set_footer(text=f"주문 #{result.order_id}")
     view = None
     if product.kind == "manual":
-        log_e.title = "🛎️ 처리가 필요한 주문"
-        log_e.color = COLOR_WARN
+        log_e.title = "🤖 자동 처리 중인 주문" if job else "🛎️ 처리가 필요한 주문"
+        log_e.color = COLOR_INFO if job else COLOR_WARN
         view = discord.ui.View(timeout=None)
         view.add_item(OrderButton("done", result.order_id))
         view.add_item(OrderButton("refund", result.order_id))
-    await send_log(guild, log_e, view)
+    msg = await send_log(guild, log_e, view)
+    if msg is not None:
+        db.set_order_log(result.order_id, msg.channel.id, msg.id)
+    if job:
+        asyncio.create_task(fulfil_order(result.order_id))
+
+
+# ------------------------------------------------------- automatic edits ----
+async def edit_order_log(order, title: str, color: int, note: str, keep_buttons: bool) -> None:
+    """Update the order's message in the log channel (or post a new one)."""
+    e = embed(title, note, color)
+    e.add_field(name="구매자", value=f"<@{order['user_id']}>")
+    e.add_field(name="상품", value=f"{order['product_name']}" + (f" × {order['quantity']}" if order["quantity"] > 1 else ""))
+    e.add_field(name="가격", value=f"{order['price']:,}원")
+    e.set_footer(text=f"주문 #{order['id']}")
+    view = None
+    if keep_buttons:
+        view = discord.ui.View(timeout=None)
+        view.add_item(OrderButton("done", order["id"]))
+        view.add_item(OrderButton("refund", order["id"]))
+    channel = client.get_channel(order["log_channel_id"] or 0)
+    if channel is not None and order["log_message_id"]:
+        try:
+            await channel.get_partial_message(order["log_message_id"]).edit(embed=e, view=view)
+            return
+        except discord.HTTPException:
+            pass
+    await send_log(client.get_guild(order["guild_id"]), e, view)
+
+
+def codes_embed(title: str, codes: tuple[str, str], text: str, color: int) -> discord.Embed:
+    e = embed(title, text, color)
+    e.add_field(name="이어하기 코드", value=f"```\n{codes[0]}\n```")
+    e.add_field(name="인증번호", value=f"```\n{codes[1]}\n```")
+    e.add_field(
+        name="받는 방법",
+        value="게임 첫 화면 → 기종변경 → 데이터 인계(이어하기)에서 위 코드를 입력하세요.",
+        inline=False,
+    )
+    return e
+
+
+def bullet(items: list[str], limit: int = 900) -> str:
+    return ("\n".join(f"• {x}" for x in items) or "-")[:limit]
+
+
+async def fulfil_order(order_id: int) -> None:
+    """Edit the buyer's save with the editor code and deliver the new transfer codes."""
+    order = db.get_order(order_id)
+    if order is None or order["status"] != "pending" or order["job_state"] != "queued" or not order["job"]:
+        return
+    job = json.loads(order["job"])
+    db.set_job_state(order_id, "running")
+    try:
+        edits = fulfil.build_edits(job["auto"], int(job["quantity"]), job.get("picks") or [])
+        result = await fulfil.run_worker({
+            "mode": "codes", "transfer_code": job["code"], "confirmation_code": job["pin"],
+            "cc": fulfil.GAME_CC, "edits": edits,
+        })
+    except Exception as exc:  # noqa: BLE001 - never leave an order stuck in "running"
+        log.exception("자동 처리 오류 (주문 #%s)", order_id)
+        result = {"ok": False, "error": f"{type(exc).__name__}: {exc}", "crashed": True}
+    backup = fulfil.save_backup(order_id, result.get("original_b64"))
+    codes = (result.get("transfer_code"), result.get("confirmation_code"))
+    have_codes = bool(codes[0] and codes[1])
+    done, failed = result.get("done") or [], result.get("failed") or []
+    order = db.get_order(order_id)
+    user_id, guild = order["user_id"], client.get_guild(order["guild_id"])
+    guild_name = guild.name if guild else "서버"
+    backup_note = f"\n원본 세이브 백업: `{backup}`" if backup else ""
+
+    if have_codes and done and not failed and not result.get("error"):
+        # Everything worked.
+        db.complete_order(order["guild_id"], order_id)
+        db.set_job_state(order_id, "done", wipe=True)
+        sent = await dm(user_id, codes_embed(
+            f"✅ {order['product_name']} 처리 완료", codes,
+            f"**{guild_name}** 주문 #{order_id}이(가) 완료됐어요!\n{bullet(done)}", COLOR_OK))
+        note = f"자동으로 처리했어요.\n{bullet(done)}"
+        if not sent:
+            note += f"\n\n⚠️ 구매자에게 DM을 보내지 못했어요. 이 코드를 직접 전달해 주세요:\n`{codes[0]}` / `{codes[1]}`"
+        await edit_order_log(order, "✅ 자동 처리 완료", COLOR_OK, note, keep_buttons=False)
+        return
+
+    if have_codes and not done:
+        # The save came back untouched (e.g. a game version the editor can't read yet): refund.
+        db.refund_order(order["guild_id"], order_id)
+        db.set_job_state(order_id, "failed", wipe=True)
+        reason = result.get("error") or bullet(failed)
+        sent = await dm(user_id, codes_embed(
+            "↩️ 처리하지 못해 환불했어요", codes,
+            f"**{guild_name}** 주문 #{order_id}을(를) 처리하지 못해서 {order['price']:,}원을 잔액으로 돌려드렸어요.\n"
+            f"사유: {reason}\n세이브는 바뀌지 않았어요. 이어하기 코드가 새로 바뀌었으니 아래 코드를 입력하세요.",
+            COLOR_ERR))
+        note = f"편집하지 못해 자동 환불했어요.\n사유: {reason}{backup_note}"
+        if not sent:
+            note += f"\n\n⚠️ 구매자에게 DM을 보내지 못했어요. 새 코드를 직접 전달해 주세요:\n`{codes[0]}` / `{codes[1]}`"
+        await edit_order_log(order, "↩️ 자동 환불", COLOR_ERR, note, keep_buttons=False)
+        return
+
+    if have_codes:
+        # Some parts worked, some didn't: deliver the codes and let an admin decide.
+        db.set_job_state(order_id, "failed", wipe=True)
+        sent = await dm(user_id, codes_embed(
+            "⚠️ 일부만 처리됐어요", codes,
+            f"**{guild_name}** 주문 #{order_id}\n완료:\n{bullet(done)}\n실패:\n{bullet(failed + ([result['error']] if result.get('error') else []))}\n"
+            "관리자가 확인한 뒤 나머지를 처리하거나 환불해 드릴 거예요.",
+            COLOR_WARN))
+        note = (f"완료:\n{bullet(done)}\n실패:\n{bullet(failed + ([result['error']] if result.get('error') else []))}"
+                f"{backup_note}\n\n남은 부분을 처리했다면 `처리 완료`, 아니면 `환불`을 눌러 주세요.")
+        if not sent:
+            note += f"\n\n⚠️ 구매자에게 DM을 보내지 못했어요. 새 코드를 직접 전달해 주세요:\n`{codes[0]}` / `{codes[1]}`"
+        await edit_order_log(order, "⚠️ 자동 처리 일부 실패", COLOR_WARN, note, keep_buttons=True)
+        return
+
+    if not result.get("original_b64") and not result.get("timeout") and not result.get("crashed"):
+        # The save was never downloaded (wrong code, server down): the codes still work. Refund.
+        db.refund_order(order["guild_id"], order_id)
+        db.set_job_state(order_id, "failed", wipe=True)
+        reason = result.get("error") or "알 수 없는 오류"
+        await dm(user_id, embed(
+            "↩️ 처리하지 못해 환불했어요",
+            f"**{guild_name}** 주문 #{order_id}: {reason}\n{order['price']:,}원을 잔액으로 돌려드렸어요. "
+            "입력한 이어하기 코드는 그대로 쓸 수 있어요. 코드를 확인하고 다시 구매해 주세요.",
+            COLOR_ERR))
+        await edit_order_log(order, "↩️ 자동 환불", COLOR_ERR, f"세이브를 받지 못해 자동 환불했어요.\n사유: {reason}",
+                             keep_buttons=False)
+        return
+
+    # The save was downloaded (code used up) but no new codes came back: an admin must step in.
+    db.set_job_state(order_id, "failed", wipe=True)
+    reason = result.get("error") or "알 수 없는 오류"
+    folder = f"\n작업 폴더: `{result['job_dir']}`" if result.get("job_dir") else ""
+    await dm(user_id, embed(
+        "⚠️ 처리 중 문제가 생겼어요",
+        f"**{guild_name}** 주문 #{order_id}을(를) 처리하다 문제가 생겼어요. 관리자가 직접 확인해서 "
+        "세이브를 돌려드리거나 환불해 드릴게요. 잠시만 기다려 주세요.",
+        COLOR_WARN))
+    await edit_order_log(order, "🚨 자동 처리 실패: 관리자 확인 필요", COLOR_ERR,
+                         f"사유: {reason}{backup_note}{folder}\n이어하기 코드가 이미 사용됐을 수 있어요. "
+                         "백업 세이브로 복원해 주거나 환불해 주세요.", keep_buttons=True)
+
+
+async def resume_jobs() -> None:
+    """After a restart: run orders that never started; flag ones cut off mid-edit."""
+    for order in db.jobs_in_state("running"):
+        db.set_job_state(order["id"], "interrupted", wipe=True)
+        await edit_order_log(order, "🚨 자동 처리 중단: 관리자 확인 필요", COLOR_ERR,
+                             "봇이 다시 시작되면서 편집이 중간에 멈췄어요. 이어하기 코드가 이미 사용됐을 수 있어요.\n"
+                             "구매자에게 확인한 뒤 처리하거나 환불해 주세요.", keep_buttons=True)
+    for order in db.jobs_in_state("queued"):
+        asyncio.create_task(fulfil_order(order["id"]))
 
 
 # ---------------------------------------------------------------- charge ----
@@ -895,6 +1093,27 @@ class ShopBot(discord.Client):
     async def on_ready(self) -> None:
         log.info("%s 로그인 완료 (서버 %d개)", self.user, len(self.guilds))
         await self.change_presence(activity=discord.Game("/상점 · /충전"))
+        if not getattr(self, "_started", False):  # on_ready also fires after reconnects
+            self._started = True
+            await resume_jobs()
+            asyncio.create_task(refresh_cat_names())
+
+
+_names_tried = 0.0
+
+
+async def refresh_cat_names() -> None:
+    """Character names for the '원하는 캐릭터' items, from the game data (once a day)."""
+    global _names_tried
+    if cat_names.ready and time.time() - cat_names.loaded_at < 86400:
+        return
+    if time.time() - _names_tried < 3600:  # at most one try an hour
+        return
+    _names_tried = time.time()
+    if await cat_names.refresh():
+        log.info("캐릭터 이름 %d개를 불러왔어요", len(cat_names.cats))
+    else:
+        log.warning("캐릭터 이름을 불러오지 못했어요 (게임 데이터 다운로드 실패)")
 
 
 client = ShopBot()
@@ -905,6 +1124,9 @@ tree = client.tree
 async def expire_charges() -> None:
     for charge in db.expire_charges(int(time.time()) - CHARGE_EXPIRE_MINUTES * 60):
         await update_charge_log(charge["id"], "입금이 확인되지 않아 만료됐어요.")
+    fulfil.prune_backups()
+    if client.is_ready():
+        asyncio.create_task(refresh_cat_names())
 
 
 @tree.error

@@ -1,2 +1,4 @@
 discord.py>=2.4
 python-dotenv>=1.0
+# The save editor (same pinned version as the Battle-Cats-Editor-Site-KR site).
+bcsfe @ https://github.com/fieryhenry/BCSFE-Python/archive/85fb94cbf00c6a74dbef58932610fb94ec8f7495.zip
