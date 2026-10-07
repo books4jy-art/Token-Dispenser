@@ -93,17 +93,12 @@ def is_admin(member: discord.abc.User) -> bool:
 
 
 def is_money_admin(member: discord.abc.User) -> bool:
-    """Who may create or move money: the server owner, or the role they picked (/설정 결제역할).
-    Approving top-ups, changing balances, prices and settings all need this."""
-    if not isinstance(member, discord.Member):
-        return False
-    if member.id == member.guild.owner_id:
-        return True
-    role_id = setting_int(member.guild.id, "money_role", 0)
-    return bool(role_id) and any(r.id == role_id for r in member.roles)
+    """Who may approve top-ups and change balances, prices and settings: every admin
+    (서버 관리 permission or the bot's admin role)."""
+    return is_admin(member)
 
 
-MONEY_ONLY = "서버 주인(또는 `/설정 결제역할`로 정한 역할)만 할 수 있어요."
+MONEY_ONLY = "관리자만 할 수 있어요."
 
 
 def embed(title: str, description: str = "", color: int = COLOR_INFO) -> discord.Embed:
@@ -1350,8 +1345,6 @@ async def set_show(interaction: discord.Interaction):
     e.add_field(name="출석 보상", value=f"{setting_int(g, 'daily_points', 0):,}원")
     e.add_field(name="최소 충전", value=f"{setting_int(g, 'min_charge', 1000):,}원")
     e.add_field(name="충전 보너스", value=f"{setting_int(g, 'charge_bonus', 0)}%")
-    money_role = setting_int(g, "money_role", 0)
-    e.add_field(name="결제 권한", value="서버 주인" + (f" + <@&{money_role}>" if money_role else " 만"))
     life_role = setting_int(g, "lifetime_role", 0)
     e.add_field(name="평생 회원 역할", value=f"<@&{life_role}>" if life_role else "없음")
     e.add_field(name="입금 계좌", value=db.get_setting(g, "bank_info") or "없음", inline=False)
@@ -1382,16 +1375,6 @@ async def set_bank(interaction: discord.Interaction, 계좌정보: str):
 async def set_admin_role(interaction: discord.Interaction, 역할: discord.Role):
     db.set_setting(interaction.guild_id, "admin_role", str(역할.id))
     await reply(interaction, embed("✅ 설정 완료", f"관리자 역할: {역할.mention}", COLOR_OK))
-
-
-@settings_group.command(name="결제역할", description="[서버 주인 전용] 충전 승인·잔액·가격·설정을 맡길 역할")
-@admin_only()
-async def set_money_role(interaction: discord.Interaction, 역할: discord.Role | None = None):
-    if interaction.user.id != interaction.guild.owner_id:
-        return await error(interaction, "서버 주인만 정할 수 있어요.")
-    db.set_setting(interaction.guild_id, "money_role", str(역할.id) if 역할 else "0")
-    text = f"결제 역할: {역할.mention}" if 역할 else "결제 역할을 없앴어요. 이제 서버 주인만 돈 관련 작업을 할 수 있어요."
-    await reply(interaction, embed("✅ 설정 완료", text, COLOR_OK))
 
 
 @settings_group.command(name="평생역할", description="평생 무료 회원에게 자동으로 줄 역할")
