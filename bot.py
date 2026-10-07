@@ -37,7 +37,7 @@ except ImportError:
 import bank
 import catalog
 import fulfil
-from db import Database, ShopError
+from db import Database, ShopError, names_match
 
 # ---------------------------------------------------------------- config ----
 TOKEN = os.environ.get("DISCORD_TOKEN", "")
@@ -183,7 +183,7 @@ async def show_balance(interaction: discord.Interaction, user: discord.abc.User)
 
 
 async def claim_daily(interaction: discord.Interaction) -> None:
-    amount = setting_int(interaction.guild_id, "daily_points", 100)
+    amount = setting_int(interaction.guild_id, "daily_points", 0)
     if amount <= 0:
         return await error(interaction, "이 서버에서는 출석 체크를 사용하지 않아요.")
     balance = db.claim_daily(interaction.guild_id, interaction.user.id, amount, kst_day_start())
@@ -753,7 +753,7 @@ class ChargeModal(discord.ui.Modal, title="잔액 충전 신청"):
         e = embed(
             "🏦 입금 안내",
             "아래 계좌로 **정확한 금액**을 **신청한 입금자명**으로 보내 주세요.\n"
-            "입금이 확인되면 자동으로 잔액이 충전되고 DM으로 알려 드려요.",
+            "입금이 확인되면 잔액이 충전되고 DM으로 알려 드려요.",
             COLOR_INFO,
         )
         e.add_field(name="입금 계좌", value=db.get_setting(guild_id, "bank_info"), inline=False)
@@ -826,33 +826,70 @@ class ChargeButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         if not is_admin(interaction.user):
             return await error(interaction, "관리자만 처리할 수 있어요.")
-        guild_id = interaction.guild_id
+        if self.action == "ok":
+            # Approving adds real balance, so the admin must confirm the deposit in the bank app.
+            charge = db.get_charge(self.charge_id)
+            if charge is None or charge["status"] != "pending":
+                return await error(interaction, "이미 처리된 충전 신청이에요.")
+            return await interaction.response.send_modal(ApproveModal(self.charge_id))
+        await resolve_charge_action(interaction, self.charge_id, approve=False)
+
+
+class ApproveModal(discord.ui.Modal, title="입금 확인"):
+    """Asks for the deposit as the bank app shows it; it must match the charge request."""
+
+    amount = discord.ui.TextInput(label="은행 앱에서 확인한 입금액 (원)", placeholder="예: 10000", max_length=12)
+    depositor = discord.ui.TextInput(label="은행 앱에 표시된 입금자명", max_length=20)
+
+    def __init__(self, charge_id: int) -> None:
+        super().__init__()
+        self.charge_id = charge_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
         charge = db.get_charge(self.charge_id)
-        approve = self.action == "ok"
-        points = points_for(guild_id, charge["amount"]) if charge else 0
+        if charge is None or charge["status"] != "pending":
+            return await error(interaction, "이미 처리된 충전 신청이에요.")
         try:
-            charge, balance = db.resolve_charge(
-                guild_id, self.charge_id, approve, interaction.user.id, points
+            won = int(str(self.amount.value).replace(",", "").replace("원", "").strip())
+        except ValueError:
+            return await error(interaction, "입금액은 숫자로 입력해 주세요.")
+        if won != charge["amount"] or not names_match(charge["depositor"], str(self.depositor.value)):
+            return await error(
+                interaction,
+                f"신청 내용과 달라서 승인하지 않았어요.\n신청: **{charge['depositor']}** · **{charge['amount']:,}원**\n"
+                f"입력: **{str(self.depositor.value).strip()}** · **{won:,}원**\n"
+                "은행 앱에서 이 입금이 실제로 들어왔는지 다시 확인해 주세요.",
             )
-        except ShopError as exc:
-            return await error(interaction, str(exc))
-        charge = db.get_charge(self.charge_id)
-        await interaction.response.edit_message(
-            embed=charge_embed(charge, f"{interaction.user.mention}님이 처리했어요."), view=None
-        )
-        if approve:
-            await dm(charge["user_id"], embed(
-                "✅ 충전 완료",
-                f"**{interaction.guild.name}**에서 **{points:,}원**이 충전됐어요!\n현재 잔액: **{balance:,}원**",
-                COLOR_OK,
-            ))
-        else:
-            await dm(charge["user_id"], embed(
-                "⛔ 충전 거절",
-                f"**{interaction.guild.name}**의 충전 신청 #{charge['id']}이(가) 거절됐어요. "
-                "입금했는데 거절됐다면 관리자에게 문의해 주세요.",
-                COLOR_ERR,
-            ))
+        await resolve_charge_action(interaction, self.charge_id, approve=True)
+
+
+async def resolve_charge_action(interaction: discord.Interaction, charge_id: int, approve: bool) -> None:
+    guild_id = interaction.guild_id
+    charge = db.get_charge(charge_id)
+    points = points_for(guild_id, charge["amount"]) if charge else 0
+    try:
+        charge, balance = db.resolve_charge(guild_id, charge_id, approve, interaction.user.id, points)
+    except ShopError as exc:
+        return await error(interaction, str(exc))
+    charge = db.get_charge(charge_id)
+    note = f"{interaction.user.mention}님이 " + ("은행 앱에서 입금을 확인하고 승인했어요." if approve else "거절했어요.")
+    if interaction.message is not None:
+        await interaction.response.edit_message(embed=charge_embed(charge, note), view=None)
+    else:
+        await reply(interaction, charge_embed(charge, note))
+    if approve:
+        await dm(charge["user_id"], embed(
+            "✅ 충전 완료",
+            f"**{interaction.guild.name}**에서 **{points:,}원**이 충전됐어요!\n현재 잔액: **{balance:,}원**",
+            COLOR_OK,
+        ))
+    else:
+        await dm(charge["user_id"], embed(
+            "⛔ 충전 거절",
+            f"**{interaction.guild.name}**의 충전 신청 #{charge['id']}이(가) 거절됐어요. "
+            "입금했는데 거절됐다면 관리자에게 문의해 주세요.",
+            COLOR_ERR,
+        ))
 
 
 class OrderButton(
@@ -927,6 +964,22 @@ class RedeemModal(discord.ui.Modal, title="평생 무료 키 등록"):
 
 
 # ----------------------------------------------------------------- panel ----
+class OldDailyButton(discord.ui.DynamicItem[discord.ui.Button], template=r"panel:daily"):
+    """The check-in button on panels posted before it was removed."""
+
+    def __init__(self) -> None:
+        super().__init__(discord.ui.Button(label="출석 체크", custom_id="panel:daily"))
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls()
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if setting_int(interaction.guild_id, "daily_points", 0) > 0:
+            return await claim_daily(interaction)
+        await error(interaction, "출석 체크는 더 이상 사용하지 않아요. 잔액은 계좌 입금으로만 충전돼요.")
+
+
 class PanelView(discord.ui.View):
     """The 자판기 panel posted by /자판기설치. Buttons keep working after restarts."""
 
@@ -949,9 +1002,6 @@ class PanelView(discord.ui.View):
     async def history(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await show_history(interaction)
 
-    @discord.ui.button(label="출석 체크", emoji="📅", style=discord.ButtonStyle.secondary, custom_id="panel:daily")
-    async def daily(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await claim_daily(interaction)
 
     @discord.ui.button(label="키 등록", emoji="🔑", style=discord.ButtonStyle.secondary, custom_id="panel:redeem")
     async def redeem_key(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1055,7 +1105,7 @@ class ShopBot(discord.Client):
 
     async def setup_hook(self) -> None:
         self.add_view(PanelView())
-        self.add_dynamic_items(ChargeButton, OrderButton)
+        self.add_dynamic_items(ChargeButton, OrderButton, OldDailyButton)
         for group in (settings_group, points_group, product_group, stock_group,
                       order_group, deposit_group, vault_group, lifetime_group):
             self.tree.add_command(group)
@@ -1220,10 +1270,9 @@ async def cmd_panel(interaction: discord.Interaction):
     e = embed(
         f"🏪 {interaction.guild.name} 자판기",
         "아래 버튼으로 잔액을 충전하고 상품을 구매할 수 있어요.\n\n"
-        "💳 **충전** — 계좌 입금 후 자동으로 잔액 충전\n"
+        "💳 **충전** — 계좌에 입금이 확인되면 잔액 충전\n"
         "🛒 **상품 구매** — 잔액으로 상품 구매 (24시간 자동 판매)\n"
         "💰 **내 정보** — 잔액·누적 충전 확인\n"
-        "📅 **출석 체크** — 하루 한 번 무료 적립금\n"
         "🔑 **키 등록** — 평생 무료 키를 등록하면 모든 상품이 0원",
     )
     await interaction.channel.send(embed=e, view=PanelView())
@@ -1257,7 +1306,7 @@ async def set_show(interaction: discord.Interaction):
     e = embed("⚙️ 현재 설정")
     e.add_field(name="로그 채널", value=f"<#{log_ch}>" if log_ch else "없음")
     e.add_field(name="관리자 역할", value=f"<@&{role}>" if role else "없음 (서버 관리 권한만)")
-    e.add_field(name="출석 보상", value=f"{setting_int(g, 'daily_points', 100):,}원")
+    e.add_field(name="출석 보상", value=f"{setting_int(g, 'daily_points', 0):,}원")
     e.add_field(name="최소 충전", value=f"{setting_int(g, 'min_charge', 1000):,}원")
     e.add_field(name="충전 보너스", value=f"{setting_int(g, 'charge_bonus', 0)}%")
     life_role = setting_int(g, "lifetime_role", 0)
@@ -1299,7 +1348,7 @@ async def set_lifetime_role_cmd(interaction: discord.Interaction, 역할: discor
     await reply(interaction, embed("✅ 설정 완료", f"평생 회원 역할: {역할.mention}", COLOR_OK))
 
 
-@settings_group.command(name="출석보상", description="출석 체크 보상 금액 (0이면 출석 끔)")
+@settings_group.command(name="출석보상", description="출석 체크 보상 (0 = 끔). 입금 없이 잔액이 생기니 주의하세요")
 @admin_only()
 async def set_daily(interaction: discord.Interaction, 금액: app_commands.Range[int, 0, 1_000_000]):
     db.set_setting(interaction.guild_id, "daily_points", str(금액))
@@ -1323,7 +1372,7 @@ async def set_bonus(interaction: discord.Interaction, 퍼센트: app_commands.Ra
     )
 
 
-@points_group.command(name="지급", description="유저 잔액을 늘려요 (이벤트·보상)")
+@points_group.command(name="지급", description="입금 없이 유저 잔액을 늘려요 (이벤트·테스트용, 금고에는 안 들어가요)")
 @admin_only()
 async def pts_give(interaction: discord.Interaction, 유저: discord.Member,
                    금액: app_commands.Range[int, 1, 100_000_000], 사유: str = "관리자 지급"):
