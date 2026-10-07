@@ -1055,6 +1055,8 @@ async def handle_deposit(guild_id: int, amount: int, name: str, raw: str, key: s
         f"직접 처리하려면 `/입금 연결 입금번호:{deposit_id}`을 사용하세요.",
         COLOR_WARN,
     )
+    if raw:
+        e.add_field(name="알림 원문", value=f"`{raw[:300]}`", inline=False)
     e.set_footer(text=f"입금 #{deposit_id}")
     await send_log(guild, e)
     return {"ok": True, "matched": False, "deposit_id": deposit_id}
@@ -1116,7 +1118,7 @@ async def deposit_webhook(request: web.Request) -> web.Response:
             # The Toss app also sends payments and ads: only report what looks like a deposit.
             looks_like_deposit = re.search(r"입금|님이.*보냈|받았", text) and not re.search(r"결제|출금|님께|에게", text)
             log.info("입금 웹훅: %s", "입금처럼 보이지만 읽지 못함" if looks_like_deposit else "입금 알림이 아니라서 무시")
-            if unfilled and "→" in text:
+            if unfilled and re.search(r"→|➔|➝|➜|⇒|->|▶", text):
                 # e.g. "송이 → 내 통장" with the title (where Toss puts the amount) missing.
                 await send_log(client.get_guild(DEPOSIT_GUILD_ID), embed(
                     "⚠️ 입금 금액이 빠진 알림",

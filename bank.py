@@ -44,6 +44,9 @@ def _to_int(text: str) -> int:
 def _is_name(token: str) -> bool:
     if token in STOPWORDS or token.endswith(BANK_SUFFIXES):
         return False
+    # Words from the notification itself ("입금됐어요", "보냈어요", "완료"), not a person.
+    if re.search(r"입금|출금|송금|이체|보냈|받았|됐|되었|했|완료|도착", token) or token.endswith(("요", "다")):
+        return False
     # 2–10 Hangul characters, or a short English name (some banks show those)
     return bool(re.fullmatch(r"[가-힣]{2,10}|[A-Za-z][A-Za-z ]{1,19}", token))
 
@@ -95,8 +98,9 @@ def parse_deposit(text: str) -> Deposit | None:
 
     rest = re.sub(r"\[[^\]]*\]", " ", rest)
     # Toss: "송이 → 내 토스뱅크 통장": the sender is right before the arrow.
-    if "→" in rest:
-        before = [t for t in re.findall(r"[가-힣]+|[A-Za-z]+", rest.split("→")[0]) if _is_name(t)]
+    arrow = re.search(r"→|➔|➝|➜|⇒|->|▶|>", rest)
+    if arrow:
+        before = [t for t in re.findall(r"[가-힣]+|[A-Za-z]+", rest[:arrow.start()]) if _is_name(t)]
         if before and amount > 0:
             return Deposit(amount, before[-1])
     tokens = re.findall(r"[가-힣]+|[A-Za-z]+", rest)
