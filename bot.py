@@ -92,6 +92,20 @@ def is_admin(member: discord.abc.User) -> bool:
     return any(r.id == role_id for r in member.roles)
 
 
+def is_money_admin(member: discord.abc.User) -> bool:
+    """Who may create or move money: the server owner, or the role they picked (/설정 결제역할).
+    Approving top-ups, changing balances, prices and settings all need this."""
+    if not isinstance(member, discord.Member):
+        return False
+    if member.id == member.guild.owner_id:
+        return True
+    role_id = setting_int(member.guild.id, "money_role", 0)
+    return bool(role_id) and any(r.id == role_id for r in member.roles)
+
+
+MONEY_ONLY = "서버 주인(또는 `/설정 결제역할`로 정한 역할)만 할 수 있어요."
+
+
 def embed(title: str, description: str = "", color: int = COLOR_INFO) -> discord.Embed:
     e = discord.Embed(title=title, description=description, color=color)
     e.timestamp = discord.utils.utcnow()
@@ -828,9 +842,13 @@ class ChargeButton(
             return await error(interaction, "관리자만 처리할 수 있어요.")
         if self.action == "ok":
             # Approving adds real balance, so the admin must confirm the deposit in the bank app.
+            if not is_money_admin(interaction.user):
+                return await error(interaction, "충전 승인은 " + MONEY_ONLY)
             charge = db.get_charge(self.charge_id)
             if charge is None or charge["status"] != "pending":
                 return await error(interaction, "이미 처리된 충전 신청이에요.")
+            if charge["user_id"] == interaction.user.id and interaction.user.id != interaction.guild.owner_id:
+                return await error(interaction, "자기 충전 신청은 승인할 수 없어요.")
             return await interaction.response.send_modal(ApproveModal(self.charge_id))
         await resolve_charge_action(interaction, self.charge_id, approve=False)
 
@@ -849,6 +867,10 @@ class ApproveModal(discord.ui.Modal, title="입금 확인"):
         charge = db.get_charge(self.charge_id)
         if charge is None or charge["status"] != "pending":
             return await error(interaction, "이미 처리된 충전 신청이에요.")
+        if not is_money_admin(interaction.user) or (
+            charge["user_id"] == interaction.user.id and interaction.user.id != interaction.guild.owner_id
+        ):
+            return await error(interaction, "이 충전 신청을 승인할 권한이 없어요.")
         try:
             won = int(str(self.amount.value).replace(",", "").replace("원", "").strip())
         except ValueError:
@@ -914,6 +936,8 @@ class OrderButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         if not is_admin(interaction.user):
             return await error(interaction, "관리자만 처리할 수 있어요.")
+        if self.action == "refund" and not is_money_admin(interaction.user):
+            return await error(interaction, "환불은 " + MONEY_ONLY)
         try:
             if self.action == "done":
                 order = db.complete_order(interaction.guild_id, self.order_id)
@@ -1181,6 +1205,8 @@ async def expire_charges() -> None:
 
 @tree.error
 async def on_app_command_error(interaction: discord.Interaction, exc: app_commands.AppCommandError):
+    if isinstance(exc, NotMoneyAdmin):
+        return await error(interaction, MONEY_ONLY)
     if isinstance(exc, app_commands.MissingPermissions):
         return await error(interaction, "이 명령어를 사용할 권한이 없어요.")
     if isinstance(exc, app_commands.NoPrivateMessage):
@@ -1193,6 +1219,20 @@ def admin_only():
     def predicate(interaction: discord.Interaction) -> bool:
         if not is_admin(interaction.user):
             raise app_commands.MissingPermissions(["manage_guild"])
+        return True
+
+    return app_commands.check(predicate)
+
+
+class NotMoneyAdmin(app_commands.CheckFailure):
+    pass
+
+
+def money_only():
+    """For commands that create or move money, or change prices and settings."""
+    def predicate(interaction: discord.Interaction) -> bool:
+        if not is_money_admin(interaction.user):
+            raise NotMoneyAdmin()
         return True
 
     return app_commands.check(predicate)
@@ -1309,6 +1349,8 @@ async def set_show(interaction: discord.Interaction):
     e.add_field(name="출석 보상", value=f"{setting_int(g, 'daily_points', 0):,}원")
     e.add_field(name="최소 충전", value=f"{setting_int(g, 'min_charge', 1000):,}원")
     e.add_field(name="충전 보너스", value=f"{setting_int(g, 'charge_bonus', 0)}%")
+    money_role = setting_int(g, "money_role", 0)
+    e.add_field(name="결제 권한", value="서버 주인" + (f" + <@&{money_role}>" if money_role else " 만"))
     life_role = setting_int(g, "lifetime_role", 0)
     e.add_field(name="평생 회원 역할", value=f"<@&{life_role}>" if life_role else "없음")
     e.add_field(name="입금 계좌", value=db.get_setting(g, "bank_info") or "없음", inline=False)
@@ -1320,7 +1362,7 @@ async def set_show(interaction: discord.Interaction):
 
 
 @settings_group.command(name="로그채널", description="충전·구매 기록과 승인 버튼이 올라갈 채널")
-@admin_only()
+@money_only()
 async def set_log(interaction: discord.Interaction, 채널: discord.TextChannel):
     db.set_setting(interaction.guild_id, "log_channel", str(채널.id))
     await reply(interaction, embed("✅ 설정 완료", f"로그 채널: {채널.mention}", COLOR_OK))
@@ -1328,42 +1370,52 @@ async def set_log(interaction: discord.Interaction, 채널: discord.TextChannel)
 
 @settings_group.command(name="계좌", description="충전할 때 보여 줄 입금 계좌")
 @app_commands.describe(계좌정보="예: 카카오뱅크 3333-01-2345678 (예금주 홍길동)")
-@admin_only()
+@money_only()
 async def set_bank(interaction: discord.Interaction, 계좌정보: str):
     db.set_setting(interaction.guild_id, "bank_info", 계좌정보)
     await reply(interaction, embed("✅ 설정 완료", f"입금 계좌: {계좌정보}", COLOR_OK))
 
 
 @settings_group.command(name="관리자역할", description="봇 관리 권한을 줄 역할")
-@admin_only()
+@money_only()
 async def set_admin_role(interaction: discord.Interaction, 역할: discord.Role):
     db.set_setting(interaction.guild_id, "admin_role", str(역할.id))
     await reply(interaction, embed("✅ 설정 완료", f"관리자 역할: {역할.mention}", COLOR_OK))
 
 
-@settings_group.command(name="평생역할", description="평생 무료 회원에게 자동으로 줄 역할")
+@settings_group.command(name="결제역할", description="[서버 주인 전용] 충전 승인·잔액·가격·설정을 맡길 역할")
 @admin_only()
+async def set_money_role(interaction: discord.Interaction, 역할: discord.Role | None = None):
+    if interaction.user.id != interaction.guild.owner_id:
+        return await error(interaction, "서버 주인만 정할 수 있어요.")
+    db.set_setting(interaction.guild_id, "money_role", str(역할.id) if 역할 else "0")
+    text = f"결제 역할: {역할.mention}" if 역할 else "결제 역할을 없앴어요. 이제 서버 주인만 돈 관련 작업을 할 수 있어요."
+    await reply(interaction, embed("✅ 설정 완료", text, COLOR_OK))
+
+
+@settings_group.command(name="평생역할", description="평생 무료 회원에게 자동으로 줄 역할")
+@money_only()
 async def set_lifetime_role_cmd(interaction: discord.Interaction, 역할: discord.Role):
     db.set_setting(interaction.guild_id, "lifetime_role", str(역할.id))
     await reply(interaction, embed("✅ 설정 완료", f"평생 회원 역할: {역할.mention}", COLOR_OK))
 
 
 @settings_group.command(name="출석보상", description="출석 체크 보상 (0 = 끔). 입금 없이 잔액이 생기니 주의하세요")
-@admin_only()
+@money_only()
 async def set_daily(interaction: discord.Interaction, 금액: app_commands.Range[int, 0, 1_000_000]):
     db.set_setting(interaction.guild_id, "daily_points", str(금액))
     await reply(interaction, embed("✅ 설정 완료", f"출석 보상: {금액:,}원", COLOR_OK))
 
 
 @settings_group.command(name="최소충전", description="한 번에 충전할 수 있는 최소 금액")
-@admin_only()
+@money_only()
 async def set_min(interaction: discord.Interaction, 금액: app_commands.Range[int, 1, MAX_CHARGE]):
     db.set_setting(interaction.guild_id, "min_charge", str(금액))
     await reply(interaction, embed("✅ 설정 완료", f"최소 충전: {금액:,}원", COLOR_OK))
 
 
 @settings_group.command(name="충전보너스", description="충전 시 추가로 얹어 주는 비율 (%)")
-@admin_only()
+@money_only()
 async def set_bonus(interaction: discord.Interaction, 퍼센트: app_commands.Range[int, 0, 100]):
     db.set_setting(interaction.guild_id, "charge_bonus", str(퍼센트))
     await reply(
@@ -1373,7 +1425,7 @@ async def set_bonus(interaction: discord.Interaction, 퍼센트: app_commands.Ra
 
 
 @points_group.command(name="지급", description="입금 없이 유저 잔액을 늘려요 (이벤트·테스트용, 금고에는 안 들어가요)")
-@admin_only()
+@money_only()
 async def pts_give(interaction: discord.Interaction, 유저: discord.Member,
                    금액: app_commands.Range[int, 1, 100_000_000], 사유: str = "관리자 지급"):
     balance = db.add_points(interaction.guild_id, 유저.id, 금액, f"{사유} (by {interaction.user.id})")
@@ -1383,7 +1435,7 @@ async def pts_give(interaction: discord.Interaction, 유저: discord.Member,
 
 
 @points_group.command(name="차감", description="유저 잔액을 줄여요")
-@admin_only()
+@money_only()
 async def pts_take(interaction: discord.Interaction, 유저: discord.Member,
                    금액: app_commands.Range[int, 1, 100_000_000], 사유: str = "관리자 차감"):
     try:
@@ -1415,7 +1467,7 @@ async def pts_take(interaction: discord.Interaction, 유저: discord.Member,
     app_commands.Choice(name="관리자 처리 (서비스 신청형)", value="manual"),
     app_commands.Choice(name="평생 무료 키 (구매하면 키 발급)", value="lifetime"),
 ])
-@admin_only()
+@money_only()
 async def prod_add(interaction: discord.Interaction, 이름: app_commands.Range[str, 1, 80],
                    가격: app_commands.Range[int, 0, 100_000_000], 종류: app_commands.Choice[str],
                    설명: app_commands.Range[str, 0, 500] = "", 역할: discord.Role | None = None,
@@ -1444,7 +1496,7 @@ async def prod_add(interaction: discord.Interaction, 이름: app_commands.Range[
 
 @product_group.command(name="수정", description="상품 정보를 바꿔요")
 @app_commands.autocomplete(상품=product_autocomplete)
-@admin_only()
+@money_only()
 @app_commands.describe(
     판매시작="이 시각(0~23시)부터 판매, -1이면 시간 제한 없앰", 판매종료="이 시각(0~23시)까지 판매, -1이면 없앰",
     단위="1단위 (예: 200개). '없음'이면 고정 상품", 최대수량="한 번에 살 수 있는 최대 단위 수",
@@ -1468,7 +1520,7 @@ async def prod_edit(interaction: discord.Interaction, 상품: int, 이름: str |
 
 @product_group.command(name="삭제", description="상품 판매를 중지해요 (구매 기록은 남아요)")
 @app_commands.autocomplete(상품=product_autocomplete)
-@admin_only()
+@money_only()
 async def prod_delete(interaction: discord.Interaction, 상품: int):
     if not db.update_product(interaction.guild_id, 상품, active=0):
         return await error(interaction, "존재하지 않는 상품이에요.")
@@ -1496,7 +1548,7 @@ async def prod_list(interaction: discord.Interaction):
 
 
 @product_group.command(name="기본목록", description="냥코 서비스 상품 목록을 한 번에 등록해요 (이미 있는 이름은 건너뜀)")
-@admin_only()
+@money_only()
 async def prod_catalog(interaction: discord.Interaction):
     added, skipped = db.add_catalog(interaction.guild_id, catalog.CATALOG)
     await reply(interaction, embed(
@@ -1529,7 +1581,7 @@ class StockModal(discord.ui.Modal, title="재고 추가"):
 
 @stock_group.command(name="추가", description="자동 전송 상품에 재고를 넣어요")
 @app_commands.autocomplete(상품=product_autocomplete)
-@admin_only()
+@money_only()
 async def stock_add(interaction: discord.Interaction, 상품: int):
     product = db.get_product(interaction.guild_id, 상품)
     if product is None or product.kind != "stock":
@@ -1539,7 +1591,7 @@ async def stock_add(interaction: discord.Interaction, 상품: int):
 
 @stock_group.command(name="비우기", description="상품의 남은 재고를 모두 지워요")
 @app_commands.autocomplete(상품=product_autocomplete)
-@admin_only()
+@money_only()
 async def stock_clear(interaction: discord.Interaction, 상품: int):
     try:
         n = db.clear_stock(interaction.guild_id, 상품)
@@ -1549,7 +1601,7 @@ async def stock_clear(interaction: discord.Interaction, 상품: int):
 
 
 @order_group.command(name="환불", description="주문을 환불하고 잔액으로 돌려줘요")
-@admin_only()
+@money_only()
 async def order_refund(interaction: discord.Interaction, 주문번호: int):
     try:
         order = db.refund_order(interaction.guild_id, 주문번호)
@@ -1585,7 +1637,7 @@ async def dep_list(interaction: discord.Interaction):
 
 
 @deposit_group.command(name="연결", description="확인되지 않은 입금을 유저에게 충전해요")
-@admin_only()
+@money_only()
 async def dep_link(interaction: discord.Interaction, 입금번호: int, 유저: discord.Member):
     dep = next((d for d in db.unmatched_deposits(interaction.guild_id, 1000) if d["id"] == 입금번호), None)
     points = points_for(interaction.guild_id, dep["amount"]) if dep else 0
@@ -1612,7 +1664,7 @@ async def dep_test(interaction: discord.Interaction, 알림문자: str):
 
 @lifetime_group.command(name="발급", description="평생 무료 키를 새로 만들어요 (이벤트·선물용)")
 @app_commands.describe(개수="만들 키 개수")
-@admin_only()
+@money_only()
 async def life_issue(interaction: discord.Interaction, 개수: app_commands.Range[int, 1, 20] = 1):
     keys = [db.issue_key(interaction.guild_id, interaction.user.id) for _ in range(개수)]
     await reply(interaction, embed(
@@ -1624,7 +1676,7 @@ async def life_issue(interaction: discord.Interaction, 개수: app_commands.Rang
 
 
 @lifetime_group.command(name="지급", description="키 없이 바로 평생 무료 회원으로 만들어요")
-@admin_only()
+@money_only()
 async def life_grant(interaction: discord.Interaction, 유저: discord.Member):
     if not db.grant_lifetime(interaction.guild_id, 유저.id):
         return await error(interaction, "이미 평생 무료 회원이에요.")
@@ -1686,7 +1738,7 @@ async def vault_balance(interaction: discord.Interaction):
 
 @vault_group.command(name="출금", description="금고에서 돈을 꺼낸 것을 기록해요")
 @app_commands.describe(금액="꺼낸 금액 (원)", 메모="예: 10월 정산, 서버 운영비")
-@admin_only()
+@money_only()
 async def vault_withdraw(interaction: discord.Interaction,
                          금액: app_commands.Range[int, 1, 1_000_000_000], 메모: str = ""):
     try:
