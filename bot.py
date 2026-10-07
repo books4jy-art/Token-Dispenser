@@ -687,7 +687,8 @@ async def resume_jobs() -> None:
 class ChargeModal(discord.ui.Modal, title="잔액 충전 신청"):
     amount = discord.ui.TextInput(label="충전 금액 (원)", placeholder="예: 10000", max_length=9)
     depositor = discord.ui.TextInput(
-        label="입금자명", placeholder="실제로 입금할 때 표시되는 이름", max_length=20
+        label="입금자명 (은행에서 보낼 때 이름과 똑같이)",
+        placeholder="예: 홍길동 · 은행 앱의 '보내는 분' 이름과 한 글자도 다르면 안 돼요", max_length=20
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -741,6 +742,14 @@ class ChargeModal(discord.ui.Modal, title="잔액 충전 신청"):
             )
         e.add_field(name="입금자명", value=f"**{name}**")
         e.add_field(name="충전될 금액", value=f"{points:,}원")
+        e.add_field(
+            name="⚠️ 입금자명을 꼭 맞춰 주세요",
+            value=f"은행 앱에서 보낼 때 **받는 분에게 표시되는 이름**(보내는 분)이 신청한 입금자명 **{name}** 과 "
+                  "**똑같아야** 자동으로 충전돼요.\n"
+                  "• 은행 앱의 '받는 분 통장 표시' 또는 '메모' 칸을 바꿨다면 신청한 이름으로 맞춰 주세요.\n"
+                  "• 이름이 다르면 자동 충전이 안 되고 관리자가 직접 확인해야 해서 늦어져요.",
+            inline=False,
+        )
         e.set_footer(text=f"신청 #{charge_id} · {CHARGE_EXPIRE_MINUTES}분 안에 입금해 주세요")
         await reply(interaction, e)
         # No log message for a request: deposits are matched automatically and the log
@@ -1252,7 +1261,7 @@ async def cmd_daily(interaction: discord.Interaction):
     await claim_daily(interaction)
 
 
-@tree.command(name="충전", description="계좌 입금으로 잔액을 충전해요")
+@tree.command(name="충전", description="계좌 입금으로 잔액을 충전해요 (입금자명은 은행에서 보내는 이름과 똑같이!)")
 @app_commands.guild_only()
 async def cmd_charge(interaction: discord.Interaction):
     await open_charge(interaction)
