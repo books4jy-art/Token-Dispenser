@@ -236,10 +236,11 @@ class Database:
         ).fetchone()
 
     @staticmethod
-    def _add(c: sqlite3.Connection, guild_id: int, user_id: int, delta: int, reason: str) -> int:
+    def _add(c: sqlite3.Connection, guild_id: int, user_id: int, delta: int, reason: str,
+             allow_negative: bool = False) -> int:
         row = Database._ensure_user(c, guild_id, user_id)
         new_balance = row["balance"] + delta
-        if new_balance < 0:
+        if new_balance < 0 and not allow_negative:
             raise ShopError(f"잔액이 부족해요. (보유: {row['balance']:,}원)")
         c.execute(
             "UPDATE users SET balance=? WHERE guild_id=? AND user_id=?",
@@ -583,6 +584,27 @@ class Database:
                 )
                 return charge, None
             return charge, self._approve(c, charge, points, admin_id)
+
+    def cancel_charge(self, guild_id: int, charge_id: int, admin_id: int) -> tuple[sqlite3.Row, int]:
+        """Undo an approved top-up whose money never arrived: take the balance back (it may go
+        below zero if it was already spent) and drop it from the vault."""
+        with self._tx() as c:
+            charge = c.execute(
+                "SELECT * FROM charges WHERE id=? AND guild_id=?", (charge_id, guild_id)
+            ).fetchone()
+            if charge is None:
+                raise ShopError("존재하지 않는 충전 신청이에요.")
+            if charge["status"] != "approved":
+                raise ShopError("승인된 충전만 취소할 수 있어요.")
+            balance = self._add(c, guild_id, charge["user_id"], -charge["points"],
+                                f"충전 취소 #{charge_id} (by {admin_id})", allow_negative=True)
+            c.execute(
+                "UPDATE users SET total_charged=MAX(total_charged-?, 0) WHERE guild_id=? AND user_id=?",
+                (charge["points"], guild_id, charge["user_id"]),
+            )
+            c.execute("UPDATE charges SET status='cancelled', handled_by=? WHERE id=?", (admin_id, charge_id))
+            c.execute("UPDATE deposits SET charge_id=NULL WHERE charge_id=?", (charge_id,))
+            return charge, balance
 
     def expire_charges(self, older_than: int) -> list[sqlite3.Row]:
         with self._tx() as c:

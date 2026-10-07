@@ -791,6 +791,7 @@ def charge_embed(charge, status: str | None = None) -> discord.Embed:
         "approved": ("✅ 충전 승인", COLOR_OK),
         "rejected": ("⛔ 충전 거절", COLOR_ERR),
         "expired": ("⌛ 충전 신청 만료", 0x99AAB5),
+        "cancelled": ("🚫 충전 취소 (입금 없음)", COLOR_ERR),
     }
     title, color = titles[charge["status"]]
     e = embed(title, status or "", color)
@@ -1651,6 +1652,23 @@ async def dep_link(interaction: discord.Interaction, 입금번호: int, 유저: 
         "✅ 충전 완료", f"**{interaction.guild.name}**에서 **{points:,}원**이 충전됐어요!\n현재 잔액: **{balance:,}원**", COLOR_OK))
     await send_log(interaction.guild, embed(
         "🔗 입금 수동 연결", f"{interaction.user.mention}: 입금 #{입금번호} {dep['amount']:,}원 → {유저.mention} ({points:,}원)", COLOR_OK))
+
+
+@deposit_group.command(name="취소", description="승인했지만 실제 입금이 없던 충전을 취소해요 (잔액·금고에서 빠져요)")
+@app_commands.describe(신청번호="충전 신청 번호 (로그 채널의 '신청 #N')")
+@money_only()
+async def dep_cancel(interaction: discord.Interaction, 신청번호: int):
+    try:
+        charge, balance = db.cancel_charge(interaction.guild_id, 신청번호, interaction.user.id)
+    except ShopError as exc:
+        return await error(interaction, str(exc))
+    note = f"<@{charge['user_id']}>의 충전 #{신청번호} ({charge['depositor']}, {charge['amount']:,}원)을 취소했어요.\n" \
+           f"잔액에서 {charge['points']:,}원을 뺐어요 → 현재 잔액 **{balance:,}원**"
+    if balance < 0:
+        note += "\n(이미 사용한 금액이 있어서 잔액이 마이너스예요. 다시 충전하기 전까지 구매할 수 없어요.)"
+    await reply(interaction, embed("✅ 충전 취소", note, COLOR_OK))
+    await send_log(interaction.guild, embed("🚫 충전 취소", f"{interaction.user.mention}: {note}", COLOR_ERR))
+    await update_charge_log(신청번호, f"{interaction.user.mention}님이 입금이 없어서 취소했어요.")
 
 
 @deposit_group.command(name="테스트", description="입금 알림 문자가 제대로 읽히는지 확인해요 (실제 충전 안 됨)")
