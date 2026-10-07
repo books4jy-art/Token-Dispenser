@@ -843,8 +843,6 @@ class ChargeButton(
             charge = db.get_charge(self.charge_id)
             if charge is None or charge["status"] != "pending":
                 return await error(interaction, "이미 처리된 충전 신청이에요.")
-            if charge["user_id"] == interaction.user.id and interaction.user.id != interaction.guild.owner_id:
-                return await error(interaction, "자기 충전 신청은 승인할 수 없어요.")
             return await interaction.response.send_modal(ApproveModal(self.charge_id))
         await resolve_charge_action(interaction, self.charge_id, approve=False)
 
@@ -863,9 +861,7 @@ class ApproveModal(discord.ui.Modal, title="입금 확인"):
         charge = db.get_charge(self.charge_id)
         if charge is None or charge["status"] != "pending":
             return await error(interaction, "이미 처리된 충전 신청이에요.")
-        if not is_money_admin(interaction.user) or (
-            charge["user_id"] == interaction.user.id and interaction.user.id != interaction.guild.owner_id
-        ):
+        if not is_money_admin(interaction.user):
             return await error(interaction, "이 충전 신청을 승인할 권한이 없어요.")
         try:
             won = int(str(self.amount.value).replace(",", "").replace("원", "").strip())
