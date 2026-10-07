@@ -1071,6 +1071,7 @@ async def deposit_webhook(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "DEPOSIT_GUILD_ID not set"}, status=500)
 
     raw = await request.text()
+    log.info("입금 웹훅: 알림 받음 (%d자)", len(raw))
     data: dict = {}
     if "json" in (request.content_type or ""):
         try:
@@ -1102,7 +1103,10 @@ async def deposit_webhook(request: web.Request) -> web.Response:
         if parsed is None:
             # Not a deposit (withdrawal, ad…) or a format we can't read. Answer 200 so
             # the phone app doesn't keep retrying; show readable-looking ones to admins.
-            if re.search(r"입금|보냈|받았|\d원", text):
+            # The Toss app also sends payments and ads: only report what looks like a deposit.
+            looks_like_deposit = re.search(r"입금|님이.*보냈|받았", text) and not re.search(r"결제|출금|님께|에게", text)
+            log.info("입금 웹훅: %s", "입금처럼 보이지만 읽지 못함" if looks_like_deposit else "입금 알림이 아니라서 무시")
+            if looks_like_deposit:
                 await send_log(client.get_guild(DEPOSIT_GUILD_ID), embed(
                     "⚠️ 읽지 못한 은행 알림",
                     f"```\n{text[:1500]}\n```\n입금 알림이 맞다면 충전 신청의 `입금 확인 (승인)`으로 처리해 주세요. "
@@ -1111,6 +1115,7 @@ async def deposit_webhook(request: web.Request) -> web.Response:
                 ))
             return web.json_response({"ok": True, "ignored": True})
         amount, name = parsed.amount, parsed.name
+    log.info("입금 웹훅: %s님 %s원 입금 확인", name, f"{amount:,}")
     if amount <= 0 or amount > MAX_CHARGE:
         return web.json_response({"ok": False, "error": "bad amount"}, status=400)
 
@@ -1155,7 +1160,8 @@ class ShopBot(discord.Client):
         app = web.Application()
         app.router.add_get("/", health)
         app.router.add_post("/deposit", deposit_webhook)
-        self.runner = web.AppRunner(app)
+        # No access log: the request line holds the webhook password.
+        self.runner = web.AppRunner(app, access_log=None)
         await self.runner.setup()
         await web.TCPSite(self.runner, WEBHOOK_HOST, WEBHOOK_PORT).start()
         log.info("입금 웹훅 대기 중: http://%s:%s/deposit", WEBHOOK_HOST, WEBHOOK_PORT)

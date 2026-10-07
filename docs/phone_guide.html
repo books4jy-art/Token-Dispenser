@@ -52,23 +52,23 @@
   <b class="t">시작하기 전에 알아 두세요</b>
   <ul>
     <li><b>안드로이드 폰</b>에서만 할 수 있어요. (아이폰은 안 돼요)</li>
-    <li>이 폰에 <b>토스뱅크 앱</b>이 설치되어 있고 로그인되어 있어야 해요.</li>
+    <li>이 폰에 <b>토스 앱</b>이 설치되어 있고 로그인되어 있어야 해요. (토스뱅크 통장 알림은 <b>토스 앱</b>으로 와요)</li>
     <li>관리자에게 <b>"연결 주소"</b>를 따로 받아 두세요. (4단계에서 붙여넣어요)</li>
   </ul>
 </div>
 
 <div class="box ok">
   <b class="t">🔒 무엇이 전달되나요?</b>
-  봇에게는 <b>토스뱅크 앱의 알림 내용</b>(예: "홍길동님이 10,000원을 보냈어요")만 전달돼요.
+  봇에게는 <b>토스 앱의 알림 내용</b>만 전달돼요. 봇은 그중 <b>입금 알림</b>(예: "홍길동님이 10,000원을 보냈어요")만 사용하고, 결제·광고 같은 다른 알림은 <b>저장하지 않고 바로 버려요.</b>
   다른 앱 알림, 문자, 사진, 계좌 비밀번호·로그인 정보는 <b>절대 전달되지 않아요.</b>
   MacroDroid에서 매크로를 끄면 언제든 바로 멈춰요.
 </div>
 
 <div class="step">
-  <h2><span class="num">0</span>토스뱅크 알림 켜기</h2>
+  <h2><span class="num">0</span>토스 입금 알림 켜기</h2>
   <ol class="taps">
-    <li>폰의 <span class="btn">설정</span> → <span class="btn">애플리케이션</span> → <span class="btn">토스뱅크</span> → <span class="btn">알림</span> 에서 알림이 <b>켜짐</b>인지 확인해요.</li>
-    <li>토스뱅크 앱 안에서도 <span class="btn">전체</span> → <span class="btn">설정</span> → <span class="btn">알림</span> 에서 <b>입출금 알림</b>이 켜져 있는지 확인해요.</li>
+    <li>폰의 <span class="btn">설정</span> → <span class="btn">애플리케이션</span> → <span class="btn">토스</span> → <span class="btn">알림</span> 에서 알림이 <b>켜짐</b>인지 확인해요.</li>
+    <li>토스 앱 안에서도 <span class="btn">전체</span> → <span class="btn">설정</span> → <span class="btn">알림</span> 에서 <b>토스뱅크 입출금 알림</b>이 켜져 있는지 확인해요.</li>
   </ol>
   <div class="box ok">✅ 입금되면 폰 위쪽에 <b>"○○○님이 10,000원을 보냈어요"</b> 같은 알림이 뜨면 준비 완료!</div>
 </div>
@@ -93,17 +93,17 @@
 </div>
 
 <div class="step">
-  <h2><span class="num">3</span>트리거 설정 <small>"토스뱅크 알림이 오면"</small></h2>
+  <h2><span class="num">3</span>트리거 설정 <small>"토스 알림이 오면"</small></h2>
   <ol class="taps">
     <li>빨간색 <b>트리거</b> 칸 오른쪽의 <span class="btn">＋</span> 를 눌러요.</li>
     <li>위쪽 <b>돋보기(🔍)</b>를 눌러 <b>알림</b> 이라고 검색 → <span class="btn">알림</span> <span class="en">(Notification)</span> 을 눌러요.</li>
     <li><span class="btn">알림 수신</span> <span class="en">(Notification Received)</span> 을 고르고 <span class="btn">확인</span>.</li>
     <li>"알림 접근 권한이 필요해요" 창이 뜨면 <span class="btn">확인</span> → 설정 화면에서 <b>MacroDroid</b> 스위치를 <b>켜고</b> → 뒤로 가기로 돌아와요.</li>
-    <li><span class="btn">앱 선택</span> 을 고르고 목록에서 <b class="red">토스뱅크만</b> 체크 → <span class="btn">확인</span>.</li>
+    <li><span class="btn">앱 선택</span> 을 고르고 목록에서 <b class="red">토스</b> 를 체크 → <span class="btn">확인</span>.<br><span class="en">(목록에 '토스뱅크' 앱이 따로 있으면 그것도 함께 체크해요)</span></li>
     <li><b>텍스트 내용</b>은 <span class="btn">모두</span> <span class="en">(Any)</span> 를 고르고 <span class="btn">확인</span>.</li>
   </ol>
-  <div class="box ok">✅ 빨간 트리거 칸에 <b>'알림 수신 (토스뱅크)'</b> 가 보이면 성공!</div>
-  <div class="box danger">⚠️ 다른 앱(카카오톡 등)은 <b>절대 체크하지 마세요.</b></div>
+  <div class="box ok">✅ 빨간 트리거 칸에 <b>'알림 수신 (토스)'</b> 가 보이면 성공!</div>
+  <div class="box danger">⚠️ 토스·토스뱅크 말고 다른 앱(카카오톡 등)은 <b>절대 체크하지 마세요.</b></div>
 </div>
 
 <div class="step">
@@ -164,9 +164,9 @@
 <div class="step" style="break-inside: avoid">
   <h2><span class="num">✓</span>마지막 확인</h2>
   <ul class="check">
-    <li>토스뱅크 입출금 알림이 켜져 있다</li>
+    <li>토스 앱의 토스뱅크 입출금 알림이 켜져 있다</li>
     <li>매크로 '입금 알림 전달' 스위치가 켜져 있다</li>
-    <li>트리거에 <b>토스뱅크만</b> 선택되어 있다</li>
+    <li>트리거에 <b>토스</b>(와 토스뱅크)만 선택되어 있다</li>
     <li>테스트 후 관리자가 "연결 확인"을 받았다</li>
     <li>MacroDroid 배터리 설정이 '제한 없음'이다</li>
   </ul>
@@ -176,7 +176,7 @@
   <b class="t">평소에 지켜 주세요</b>
   <ul>
     <li>폰은 <b>켜져 있고</b> 와이파이나 데이터가 <b>연결</b>되어 있어야 해요.</li>
-    <li>토스뱅크 앱에서 로그아웃하거나 알림을 끄면 안 돼요.</li>
+    <li>토스 앱에서 로그아웃하거나 알림을 끄면 안 돼요.</li>
     <li>폰을 바꾸거나 초기화하면 이 설정을 다시 해야 해요.</li>
   </ul>
 </div>

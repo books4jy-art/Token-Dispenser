@@ -60,6 +60,12 @@ def parse_deposit(text: str) -> Deposit | None:
     text = text.replace("[Web발신]", " ").replace("\r", "\n")
     if "출금" in text and "입금" not in text:
         return None
+    # Money going out ("홍길동님께 10,000원을 보냈어요", card payments) is not a deposit.
+    if re.search(r"님(께|에게)|에게\s*[\d,]+\s*원|결제|승인|출금완료|송금했|보냈습니다", text):
+        return None
+    # Points, cashback, interest and refunds aren't someone paying for a top-up.
+    if re.search(r"포인트|캐시백|이자|환급|리워드|혜택|이벤트", text):
+        return None
     if not re.search(r"입금|보냈|받았|송금", text):
         return None
     # Drop the balance, dates/times and masked account numbers so they are not
@@ -69,7 +75,7 @@ def parse_deposit(text: str) -> Deposit | None:
     body = re.sub(r"[\d*]+-[\d*-]+|\d*\*+\d*", " ", body)
 
     # Toss / KakaoBank push style: "홍길동님이 10,000원을 보냈어요"
-    m = re.search(r"([가-힣A-Za-z]{2,10})\s*님[이께]?\s*" + AMOUNT + r"\s*원", body)
+    m = re.search(r"([가-힣A-Za-z]{2,10})\s*님이?\s*" + AMOUNT + r"\s*원", body)
     if m and _is_name(m.group(1)):
         return Deposit(_to_int(m.group(2)), m.group(1))
 
