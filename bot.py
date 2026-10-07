@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import time
+import urllib.parse
 
 import discord
 from aiohttp import web
@@ -1079,14 +1080,22 @@ async def deposit_webhook(request: web.Request) -> web.Response:
         except json.JSONDecodeError:
             return web.json_response({"ok": False, "error": "bad json"}, status=400)
     elif "form" in (request.content_type or ""):
-        data = dict(await request.post())
+        form = dict(urllib.parse.parse_qsl(raw, keep_blank_values=True))
+        if any(k in form for k in ("text", "message", "body", "amount")):
+            data = form
+        else:
+            # Phone apps often send plain text with a form content type: use the body as is.
+            raw = urllib.parse.unquote_plus(raw)
     text = str(data.get("text") or data.get("message") or data.get("body") or ("" if data else raw))
 
     # MacroDroid's "test macro" sends its placeholders unfilled: treat that as a connection test.
     if not text.strip() or "[notification" in text or "연결 테스트" in text:
+        received = text.strip()[:200] or "(빈 내용)"
         await send_log(client.get_guild(DEPOSIT_GUILD_ID), embed(
             "📱 입금 알림 폰 연결 확인",
-            "은행 앱 알림을 보내는 폰이 봇에 연결됐어요. 실제 입금이 들어오면 자동으로 충전돼요.",
+            "은행 앱 알림을 보내는 폰이 봇에 연결됐어요. 실제 입금이 들어오면 자동으로 충전돼요.\n"
+            f"받은 내용: `{received}`\n"
+            "※ 실제 입금 알림인데 이 메시지가 뜬다면, MacroDroid의 본문(Body) 설정을 확인해 주세요.",
             COLOR_OK,
         ))
         return web.json_response({"ok": True, "test": True})
