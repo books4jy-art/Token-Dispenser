@@ -65,7 +65,7 @@ COLOR_WARN = 0xFEE75C
 COLOR_ERR = 0xED4245
 
 KIND_LABEL = {
-    "stock": "자동 전송", "role": "역할 지급", "manual": "관리자 처리", "lifetime": "평생 무료 키",
+    "stock": "자동 전송", "role": "역할 지급", "manual": "관리자 처리",
 }
 STATUS_LABEL = {"done": "완료", "pending": "처리 대기", "refunded": "환불됨"}
 
@@ -153,28 +153,6 @@ async def dm(user_id: int, e: discord.Embed) -> bool:
         return False
 
 
-async def set_lifetime_role(guild: discord.Guild, user_id: int, give: bool) -> None:
-    """Give or take the optional lifetime member role (설정 평생역할)."""
-    role = guild.get_role(setting_int(guild.id, "lifetime_role", 0))
-    if role is None:
-        return
-    try:
-        member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-        if give:
-            await member.add_roles(role, reason="평생 무료 회원")
-        else:
-            await member.remove_roles(role, reason="평생 무료 회원 해제")
-    except discord.HTTPException:
-        log.warning("평생 회원 역할을 바꾸지 못했어요 (user %s)", user_id)
-
-
-async def after_refund(guild: discord.Guild, order) -> None:
-    """A refunded lifetime key is revoked in the DB; also take the role back."""
-    key = db.get_key(order["delivered"]) if order["delivered"].startswith("LIFE-") else None
-    if key is not None and key["redeemed_by"]:
-        await set_lifetime_role(guild, key["redeemed_by"], give=False)
-
-
 def kst_day_start() -> int:
     now = datetime.datetime.now(KST)
     return int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
@@ -190,8 +168,6 @@ async def show_balance(interaction: discord.Interaction, user: discord.abc.User)
     e = embed(f"💰 {user.display_name}님의 잔액", f"## {row['balance']:,}원")
     e.add_field(name="누적 충전", value=f"{row['total_charged']:,}원")
     e.add_field(name="누적 사용", value=f"{row['total_spent']:,}원")
-    if db.is_lifetime(interaction.guild_id, user.id):
-        e.add_field(name="👑 평생 무료 회원", value="모든 상품을 0원으로 구매할 수 있어요.", inline=False)
     await reply(interaction, e)
 
 
@@ -226,10 +202,8 @@ def kst_hour() -> int:
 
 
 def price_label(p, price: int | None = None) -> str:
-    """'3,000원', '200원 / 200개', or crossed out for lifetime members."""
+    """'3,000원' or '200원 / 200개'."""
     unit = f" / {p.unit}" if p.unit else ""
-    if price is not None and price != p.price:
-        return f"~~{p.price:,}원{unit}~~ 0원"
     return f"{p.price:,}원{unit}"
 
 
@@ -259,8 +233,6 @@ async def open_shop(interaction: discord.Interaction) -> None:
         return await show_category(interaction, cats[0], edit=False)
     balance = db.get_user(interaction.guild_id, interaction.user.id)["balance"]
     e = embed("🛒 상점", f"보유 잔액: **{balance:,}원**\n아래 메뉴에서 분류를 골라 주세요.")
-    if db.is_lifetime(interaction.guild_id, interaction.user.id):
-        e.description += "\n👑 **평생 무료 회원**이라 모든 상품이 **0원**이에요!"
     for cat in cats[:25]:
         items = [p for p in products if p.category == cat]
         cheapest = min(p.price for p in items)
@@ -436,7 +408,6 @@ async def confirm_purchase(interaction: discord.Interaction, product, quantity: 
     e = embed(
         "🛍️ 구매 확인",
         f"{what}을(를) **{price:,}원**에 구매할까요?"
-        + (" (👑 평생 무료 회원 혜택)" if unit_price != product.price else "")
         + f"\n\n보유 잔액: {balance:,}원 → 구매 후: {balance - price:,}원",
         COLOR_WARN,
     )
@@ -529,21 +500,6 @@ async def purchase(interaction: discord.Interaction, product_id: int, quantity: 
             e.set_footer(text="DM을 보낼 수 없어서 여기에만 표시했어요. 꼭 따로 저장해 주세요!")
     elif product.kind == "role":
         e.add_field(name="지급된 역할", value=f"<@&{product.role_id}>", inline=False)
-    elif product.kind == "lifetime":
-        e.add_field(name="🔑 평생 무료 키", value=f"`{result.delivered}`", inline=False)
-        e.add_field(
-            name="사용 방법",
-            value="`/키등록`(또는 자판기의 🔑 버튼)에 이 키를 넣으면 평생 무료 회원이 돼요.\n"
-                  "다른 사람에게 선물해도 돼요. 키는 한 번만 사용할 수 있어요.",
-            inline=False,
-        )
-        dm_embed = embed(
-            "🔑 평생 무료 키",
-            f"```\n{result.delivered}\n```\n`/키등록`으로 등록하면 모든 상품을 0원으로 구매할 수 있어요.",
-            COLOR_OK,
-        )
-        dm_embed.set_footer(text=f"{guild.name} · 주문 #{result.order_id}")
-        await dm(interaction.user.id, dm_embed)
     elif job:
         e.add_field(
             name="🤖 자동 처리 중",
@@ -561,7 +517,7 @@ async def purchase(interaction: discord.Interaction, product_id: int, quantity: 
     log_e.add_field(name="구매자", value=interaction.user.mention)
     log_e.add_field(name="상품", value=f"#{product.id} {product.name}{qty_text}")
     log_e.add_field(
-        name="가격", value=f"{result.price:,}원" + (" (평생 회원)" if result.price != product.price else "")
+        name="가격", value=f"{result.price:,}원"
     )
     if request:
         log_e.add_field(name="요청 내용", value=f"```\n{request[:1000]}\n```", inline=False)
@@ -949,7 +905,6 @@ class OrderButton(
                 user_msg = f"주문 #{order['id']} **{order['product_name']}** 처리가 완료됐어요!"
             else:
                 order = db.refund_order(interaction.guild_id, self.order_id)
-                await after_refund(interaction.guild, order)
                 text, color = "↩️ 주문 환불", COLOR_ERR
                 user_msg = (f"주문 #{order['id']} **{order['product_name']}**이(가) 환불되어 "
                             f"{order['price']:,}원을 돌려드렸어요.")
@@ -966,32 +921,21 @@ class OrderButton(
         await dm(order["user_id"], embed(text, user_msg, color))
 
 
-# -------------------------------------------------------------- lifetime ----
-async def redeem(interaction: discord.Interaction, key: str) -> None:
-    try:
-        db.redeem_key(interaction.guild_id, interaction.user.id, key)
-    except ShopError as exc:
-        return await error(interaction, str(exc))
-    await set_lifetime_role(interaction.guild, interaction.user.id, give=True)
-    await reply(interaction, embed(
-        "👑 평생 무료 회원 등록 완료",
-        "이제 상점의 모든 상품을 **0원**로 구매할 수 있어요!\n(평생 무료 키 상품은 제외)",
-        COLOR_OK,
-    ))
-    await send_log(interaction.guild, embed(
-        "👑 평생 무료 키 등록", f"{interaction.user.mention}님이 키 `{key.strip().upper()}`를 등록했어요.",
-        COLOR_OK,
-    ))
-
-
-class RedeemModal(discord.ui.Modal, title="평생 무료 키 등록"):
-    key = discord.ui.TextInput(label="키", placeholder="LIFE-XXXX-XXXX-XXXX", max_length=40)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        await redeem(interaction, str(self.key.value))
-
-
 # ----------------------------------------------------------------- panel ----
+class OldRedeemButton(discord.ui.DynamicItem[discord.ui.Button], template=r"panel:redeem"):
+    """The key button on panels posted before the lifetime key was removed."""
+
+    def __init__(self) -> None:
+        super().__init__(discord.ui.Button(label="키 등록", custom_id="panel:redeem"))
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls()
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await error(interaction, "키 등록은 더 이상 사용하지 않아요.")
+
+
 class OldDailyButton(discord.ui.DynamicItem[discord.ui.Button], template=r"panel:daily"):
     """The check-in button on panels posted before it was removed."""
 
@@ -1031,9 +975,6 @@ class PanelView(discord.ui.View):
         await show_history(interaction)
 
 
-    @discord.ui.button(label="키 등록", emoji="🔑", style=discord.ButtonStyle.secondary, custom_id="panel:redeem")
-    async def redeem_key(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.send_modal(RedeemModal())
 
 
 # --------------------------------------------------------- bank webhook -----
@@ -1176,9 +1117,9 @@ class ShopBot(discord.Client):
 
     async def setup_hook(self) -> None:
         self.add_view(PanelView())
-        self.add_dynamic_items(ChargeButton, OrderButton, OldDailyButton)
+        self.add_dynamic_items(ChargeButton, OrderButton, OldDailyButton, OldRedeemButton)
         for group in (settings_group, points_group, product_group, stock_group,
-                      order_group, deposit_group, vault_group, lifetime_group):
+                      order_group, deposit_group, vault_group):
             self.tree.add_command(group)
         try:
             if DEV_GUILD_ID:
@@ -1329,13 +1270,6 @@ async def cmd_history(interaction: discord.Interaction):
     await show_history(interaction)
 
 
-@tree.command(name="키등록", description="평생 무료 키를 등록해요")
-@app_commands.guild_only()
-@app_commands.describe(키="LIFE-XXXX-XXXX-XXXX")
-async def cmd_redeem(interaction: discord.Interaction, 키: str):
-    await redeem(interaction, 키)
-
-
 @tree.command(name="랭킹", description="잔액 순위를 확인해요")
 @app_commands.guild_only()
 async def cmd_rank(interaction: discord.Interaction):
@@ -1361,7 +1295,6 @@ async def cmd_panel(interaction: discord.Interaction):
         "💳 **충전** — 계좌에 입금이 확인되면 잔액 충전\n"
         "🛒 **상품 구매** — 잔액으로 상품 구매 (24시간 자동 판매)\n"
         "💰 **내 정보** — 잔액·누적 충전 확인\n"
-        "🔑 **키 등록** — 평생 무료 키를 등록하면 모든 상품이 0원",
     )
     await interaction.channel.send(embed=e, view=PanelView())
     await reply(interaction, embed("✅ 자판기 패널을 설치했어요.", color=COLOR_OK))
@@ -1382,7 +1315,6 @@ stock_group = admin_group("재고", "[관리자] 재고 관리")
 order_group = admin_group("주문", "[관리자] 주문 처리")
 deposit_group = admin_group("입금", "[관리자] 계좌 입금 확인")
 vault_group = admin_group("금고", "[관리자] 충전으로 들어온 실제 돈 관리")
-lifetime_group = admin_group("평생", "[관리자] 평생 무료 회원·키 관리")
 
 
 @settings_group.command(name="보기", description="현재 설정을 확인해요")
@@ -1397,8 +1329,6 @@ async def set_show(interaction: discord.Interaction):
     e.add_field(name="출석 보상", value=f"{setting_int(g, 'daily_points', 0):,}원")
     e.add_field(name="최소 충전", value=f"{setting_int(g, 'min_charge', 1000):,}원")
     e.add_field(name="충전 보너스", value=f"{setting_int(g, 'charge_bonus', 0)}%")
-    life_role = setting_int(g, "lifetime_role", 0)
-    e.add_field(name="평생 회원 역할", value=f"<@&{life_role}>" if life_role else "없음")
     e.add_field(name="입금 계좌", value=db.get_setting(g, "bank_info") or "없음", inline=False)
     e.add_field(
         name="자동 입금 확인",
@@ -1427,13 +1357,6 @@ async def set_bank(interaction: discord.Interaction, 계좌정보: str):
 async def set_admin_role(interaction: discord.Interaction, 역할: discord.Role):
     db.set_setting(interaction.guild_id, "admin_role", str(역할.id))
     await reply(interaction, embed("✅ 설정 완료", f"관리자 역할: {역할.mention}", COLOR_OK))
-
-
-@settings_group.command(name="평생역할", description="평생 무료 회원에게 자동으로 줄 역할")
-@money_only()
-async def set_lifetime_role_cmd(interaction: discord.Interaction, 역할: discord.Role):
-    db.set_setting(interaction.guild_id, "lifetime_role", str(역할.id))
-    await reply(interaction, embed("✅ 설정 완료", f"평생 회원 역할: {역할.mention}", COLOR_OK))
 
 
 @settings_group.command(name="출석보상", description="출석 체크 보상 (0 = 끔). 입금 없이 잔액이 생기니 주의하세요")
@@ -1501,7 +1424,6 @@ async def pts_take(interaction: discord.Interaction, 유저: discord.Member,
     app_commands.Choice(name="자동 전송 (재고를 DM으로 보냄)", value="stock"),
     app_commands.Choice(name="역할 지급", value="role"),
     app_commands.Choice(name="관리자 처리 (서비스 신청형)", value="manual"),
-    app_commands.Choice(name="평생 무료 키 (구매하면 키 발급)", value="lifetime"),
 ])
 @money_only()
 async def prod_add(interaction: discord.Interaction, 이름: app_commands.Range[str, 1, 80],
@@ -1525,7 +1447,6 @@ async def prod_add(interaction: discord.Interaction, 이름: app_commands.Range[
     )
     hint = {
         "stock": f"\n`/재고 추가 상품:{pid}`로 재고를 넣어 주세요.",
-        "lifetime": "\n구매할 때마다 새 키가 자동으로 만들어져요. `/설정 평생역할`로 회원 역할도 정할 수 있어요.",
     }.get(종류.value, "")
     await reply(interaction, embed("✅ 상품 등록", f"#{pid} **{이름}** — {가격:,}원 ({종류.name}){hint}", COLOR_OK))
 
@@ -1643,7 +1564,6 @@ async def order_refund(interaction: discord.Interaction, 주문번호: int):
         order = db.refund_order(interaction.guild_id, 주문번호)
     except ShopError as exc:
         return await error(interaction, str(exc))
-    await after_refund(interaction.guild, order)
     await reply(interaction, embed("✅ 환불 완료", f"주문 #{주문번호}: <@{order['user_id']}>에게 {order['price']:,}원 반환", COLOR_OK))
     await dm(order["user_id"], embed(
         "↩️ 주문 환불", f"주문 #{주문번호} **{order['product_name']}**이(가) 환불되어 {order['price']:,}원을 돌려드렸어요.",
@@ -1763,62 +1683,6 @@ async def dep_test(interaction: discord.Interaction, 알림문자: str):
     if parsed is None:
         return await error(interaction, "입금으로 읽지 못했어요. 출금/광고 문자이거나 형식이 달라요 (DEPOSIT_REGEX 설정 필요).")
     await reply(interaction, embed("✅ 읽기 성공", f"입금자명: **{parsed.name}**\n금액: **{parsed.amount:,}원**", COLOR_OK))
-
-
-@lifetime_group.command(name="발급", description="평생 무료 키를 새로 만들어요 (이벤트·선물용)")
-@app_commands.describe(개수="만들 키 개수")
-@money_only()
-async def life_issue(interaction: discord.Interaction, 개수: app_commands.Range[int, 1, 20] = 1):
-    keys = [db.issue_key(interaction.guild_id, interaction.user.id) for _ in range(개수)]
-    await reply(interaction, embed(
-        "🔑 평생 무료 키 발급", "```\n" + "\n".join(keys) + "\n```\n받는 사람이 `/키등록`으로 등록하면 돼요.",
-        COLOR_OK,
-    ))
-    await send_log(interaction.guild, embed(
-        "🔑 평생 무료 키 발급", f"{interaction.user.mention}님이 키 {개수}개를 발급했어요.", COLOR_INFO))
-
-
-@lifetime_group.command(name="지급", description="키 없이 바로 평생 무료 회원으로 만들어요")
-@money_only()
-async def life_grant(interaction: discord.Interaction, 유저: discord.Member):
-    if not db.grant_lifetime(interaction.guild_id, 유저.id):
-        return await error(interaction, "이미 평생 무료 회원이에요.")
-    await set_lifetime_role(interaction.guild, 유저.id, give=True)
-    await reply(interaction, embed("✅ 지급 완료", f"{유저.mention}님이 평생 무료 회원이 됐어요.", COLOR_OK))
-    await dm(유저.id, embed(
-        "👑 평생 무료 회원", f"**{interaction.guild.name}**에서 평생 무료 회원이 됐어요! 모든 상품을 0원으로 구매할 수 있어요.",
-        COLOR_OK))
-    await send_log(interaction.guild, embed(
-        "👑 평생 무료 회원 지급", f"{interaction.user.mention} → {유저.mention}", COLOR_OK))
-
-
-@lifetime_group.command(name="회수", description="평생 무료 회원을 해제해요 (등록한 키도 사용 중지)")
-@admin_only()
-async def life_revoke(interaction: discord.Interaction, 유저: discord.Member):
-    if not db.revoke_lifetime(interaction.guild_id, 유저.id):
-        return await error(interaction, "평생 무료 회원이 아니에요.")
-    await set_lifetime_role(interaction.guild, 유저.id, give=False)
-    await reply(interaction, embed("✅ 회수 완료", f"{유저.mention}님의 평생 무료 회원을 해제했어요.", COLOR_OK))
-    await send_log(interaction.guild, embed(
-        "⛔ 평생 무료 회원 회수", f"{interaction.user.mention} → {유저.mention}", COLOR_ERR))
-
-
-@lifetime_group.command(name="목록", description="평생 무료 회원과 아직 안 쓴 키를 확인해요")
-@admin_only()
-async def life_list(interaction: discord.Interaction):
-    members, unused = db.lifetime_summary(interaction.guild_id)
-    e = embed("👑 평생 무료 회원")
-    e.add_field(
-        name=f"회원 ({len(members)}명)",
-        value="\n".join(f"<@{m['user_id']}> · {fmt_time(m['granted_at'])}" for m in members[:20]) or "없음",
-        inline=False,
-    )
-    e.add_field(
-        name=f"사용 안 된 키 ({len(unused)}개)",
-        value="\n".join(f"`{k['key']}` · {fmt_time(k['created_at'])}" for k in unused[:15]) or "없음",
-        inline=False,
-    )
-    await reply(interaction, e)
 
 
 def vault_embed(v: dict[str, int], title: str = "🏦 금고") -> discord.Embed:
