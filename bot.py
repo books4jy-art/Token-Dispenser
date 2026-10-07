@@ -746,6 +746,11 @@ class ChargeModal(discord.ui.Modal, title="잔액 충전 신청"):
                 interaction, f"충전 금액은 {minimum:,}원 이상 {MAX_CHARGE:,}원 이하로 입력해 주세요."
             )
         name = str(self.depositor.value).strip()
+        try:
+            asked = won
+            won = db.unique_amount(guild_id, won, CHARGE_EXPIRE_MINUTES * 60)
+        except ShopError as exc:
+            return await error(interaction, str(exc))
         points = points_for(guild_id, won)
         try:
             charge_id, balance = db.create_charge(
@@ -771,6 +776,13 @@ class ChargeModal(discord.ui.Modal, title="잔액 충전 신청"):
         )
         e.add_field(name="입금 계좌", value=db.get_setting(guild_id, "bank_info"), inline=False)
         e.add_field(name="입금 금액", value=f"**{won:,}원**")
+        if won != asked:
+            e.add_field(
+                name="⚠️ 금액을 꼭 확인하세요",
+                value=f"같은 금액을 신청한 분이 있어서 입금 금액을 **{won:,}원**으로 정했어요. "
+                      f"끝자리까지 정확히 보내 주세요. ({won:,}원이 그대로 충전돼요)",
+                inline=False,
+            )
         e.add_field(name="입금자명", value=f"**{name}**")
         e.add_field(name="충전될 금액", value=f"{points:,}원")
         e.set_footer(text=f"신청 #{charge_id} · {CHARGE_EXPIRE_MINUTES}분 안에 입금해 주세요")
@@ -1048,10 +1060,11 @@ async def handle_deposit(guild_id: int, amount: int, name: str, raw: str, key: s
         ))
         return {"ok": True, "matched": True, "charge_id": charge["id"]}
 
+    what = (f"**{name}**님이 **{amount:,}원**을 입금했지만 일치하는 충전 신청이 없어요.\n" if name else
+            f"**{amount:,}원**이 입금됐지만 (알림에 입금자 이름이 없어요) 같은 금액의 충전 신청이 없거나 여러 개예요.\n")
     e = embed(
         "❓ 확인되지 않은 입금",
-        f"**{name}**님이 **{amount:,}원**을 입금했지만 일치하는 충전 신청이 없어요.\n"
-        f"같은 이름·금액으로 `/충전`을 신청하면 자동으로 연결되고, "
+        what + "같은 이름·금액으로 `/충전`을 신청하면 자동으로 연결되고, "
         f"직접 처리하려면 `/입금 연결 입금번호:{deposit_id}`을 사용하세요.",
         COLOR_WARN,
     )
@@ -1137,11 +1150,14 @@ async def deposit_webhook(request: web.Request) -> web.Response:
                 ))
             return web.json_response({"ok": True, "ignored": True})
         amount, name = parsed.amount, parsed.name
-    log.info("입금 웹훅: %s님 %s원 입금 확인", name, f"{amount:,}")
+    log.info("입금 웹훅: %s %s원 입금 확인", f"{name}님" if name else "(이름 없음)", f"{amount:,}")
     if amount <= 0 or amount > MAX_CHARGE:
         return web.json_response({"ok": False, "error": "bad amount"}, status=400)
 
-    key = str(data.get("id") or "") or hashlib.sha256((text or raw).encode()).hexdigest()
+    # Same text within the same minute = the phone sent it twice. Banks send identical
+    # text for separate deposits of the same amount, so later ones still count.
+    key = str(data.get("id") or "") or hashlib.sha256(
+        f"{text or raw}|{int(time.time() // 60)}".encode()).hexdigest()
     result = await handle_deposit(DEPOSIT_GUILD_ID, amount, name, text or raw, key)
     return web.json_response(result)
 

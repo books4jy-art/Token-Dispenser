@@ -6,6 +6,7 @@ same points or hand out the same stock item twice.
 """
 from __future__ import annotations
 
+import re
 import secrets
 import sqlite3
 import threading
@@ -561,6 +562,21 @@ class Database:
             (guild_id, limit),
         ).fetchall()
 
+    def unique_amount(self, guild_id: int, amount: int, match_window: int) -> int:
+        """An amount no other waiting request uses (adds 1–99원 if needed), so a deposit
+        without the sender's name can still be matched to exactly one request."""
+        since = int(time.time()) - match_window
+        taken = {r["amount"] for r in self._conn.execute(
+            "SELECT amount FROM charges WHERE guild_id=? AND status='pending' AND created_at>=?",
+            (guild_id, since),
+        )}
+        if amount not in taken:
+            return amount
+        for extra in secrets.SystemRandom().sample(range(1, 100), 99):
+            if amount + extra not in taken:
+                return amount + extra
+        raise ShopError("지금은 같은 금액의 충전 신청이 너무 많아요. 잠시 뒤 다시 시도해 주세요.")
+
     def set_charge_log(self, charge_id: int, channel_id: int, message_id: int) -> None:
         with self._tx() as c:
             c.execute(
@@ -643,14 +659,21 @@ class Database:
             except sqlite3.IntegrityError:
                 return None
             deposit_id = cur.lastrowid
-            for charge in c.execute(
+            waiting = c.execute(
                 "SELECT * FROM charges WHERE guild_id=? AND status='pending' AND amount=? "
                 "AND created_at>=? ORDER BY id",
                 (guild_id, amount, now - match_window),
-            ).fetchall():
-                if names_match(charge["depositor"], depositor):
-                    c.execute("UPDATE deposits SET charge_id=? WHERE id=?", (charge["id"], deposit_id))
-                    return deposit_id, charge, self._approve(c, charge, points_for(amount), 0)
+            ).fetchall()
+            if depositor:
+                matches = [ch for ch in waiting if names_match(ch["depositor"], depositor)]
+            else:
+                # No sender name in the notification: only safe when exactly one request
+                # is waiting for this exact amount.
+                matches = waiting if len(waiting) == 1 else []
+            if matches:
+                charge = matches[0]
+                c.execute("UPDATE deposits SET charge_id=? WHERE id=?", (charge["id"], deposit_id))
+                return deposit_id, charge, self._approve(c, charge, points_for(amount), 0)
             return deposit_id, None, None
 
     def unmatched_deposits(self, guild_id: int, limit: int = 15) -> list[sqlite3.Row]:
@@ -838,6 +861,7 @@ class Database:
 
 
 def normalize_name(name: str) -> str:
+    name = re.sub(r"\([^)]*\)|（[^）]*）", "", name)  # drop a bracketed memo: "송이(찐막)" -> "송이"
     return "".join(name.split())[:20]
 
 

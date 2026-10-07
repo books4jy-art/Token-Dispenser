@@ -23,7 +23,7 @@ STOPWORDS = {
     "알림", "계좌", "보통예금", "저축예금", "입출금", "님이", "님", "원", "보냈어요", "보냈습니다",
     "입금했어요", "입금했습니다", "입금되었습니다", "받았어요", "누적", "통장", "내", "모임통장",
     "국민", "신한", "우리", "하나", "농협", "기업", "카카오", "카카오뱅크", "토스", "토스뱅크",
-    "케이뱅크", "새마을", "새마을금고", "우체국", "수협", "신협", "부산", "대구", "경남", "광주",
+    "케이뱅크", "새마을", "새마을금고", "토스머니", "머니", "내", "통장", "계좌", "우체국", "수협", "신협", "부산", "대구", "경남", "광주",
     "전북", "제주", "씨티", "SC제일", "KB", "NH", "IBK", "SH", "MG",
 }
 BANK_SUFFIXES = ("은행", "뱅크", "금고", "증권", "카드", "저축")
@@ -97,6 +97,8 @@ def parse_deposit(text: str) -> Deposit | None:
         rest = body[: amount_match.start()] + " " + body[amount_match.end():]
 
     rest = re.sub(r"\[[^\]]*\]", " ", rest)
+    # "송이(찐막)": the sender's memo in brackets is not part of the name.
+    rest = re.sub(r"\([^)]*\)|（[^）]*）", " ", rest)
     # Toss: "송이 → 내 토스뱅크 통장": the sender is right before the arrow.
     arrow = re.search(r"→|➔|➝|➜|⇒|->|▶|>", rest)
     if arrow:
@@ -105,6 +107,10 @@ def parse_deposit(text: str) -> Deposit | None:
             return Deposit(amount, before[-1])
     tokens = re.findall(r"[가-힣]+|[A-Za-z]+", rest)
     names = [t for t in tokens if _is_name(t)]
-    if not names or amount <= 0:
+    if amount <= 0:
         return None
+    if not names:
+        # e.g. Toss "1,000원이 입금됐어요. 토스머니 입금": a deposit without the sender's name.
+        # The bot then matches it by amount alone (only when that is unambiguous).
+        return Deposit(amount, "") if "입금" in text else None
     return Deposit(amount, names[0])
