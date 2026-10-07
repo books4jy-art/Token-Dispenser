@@ -555,6 +555,12 @@ class Database:
                     return charge_id, self._approve(c, charge, points, 0)
             return charge_id, None
 
+    def pending_charges(self, guild_id: int, limit: int = 25) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM charges WHERE guild_id=? AND status='pending' ORDER BY id DESC LIMIT ?",
+            (guild_id, limit),
+        ).fetchall()
+
     def set_charge_log(self, charge_id: int, channel_id: int, message_id: int) -> None:
         with self._tx() as c:
             c.execute(

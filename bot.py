@@ -775,13 +775,8 @@ class ChargeModal(discord.ui.Modal, title="잔액 충전 신청"):
         e.add_field(name="충전될 금액", value=f"{points:,}원")
         e.set_footer(text=f"신청 #{charge_id} · {CHARGE_EXPIRE_MINUTES}분 안에 입금해 주세요")
         await reply(interaction, e)
-
-        view = discord.ui.View(timeout=None)
-        view.add_item(ChargeButton("ok", charge_id))
-        view.add_item(ChargeButton("no", charge_id))
-        msg = await send_log(interaction.guild, charge_embed(db.get_charge(charge_id)), view)
-        if msg is not None:
-            db.set_charge_log(charge_id, msg.channel.id, msg.id)
+        # No log message for a request: deposits are matched automatically and the log
+        # shows the result. If one needs a hand, admins use /입금 승인 신청번호.
 
 
 def charge_embed(charge, status: str | None = None) -> discord.Embed:
@@ -893,8 +888,9 @@ async def resolve_charge_action(interaction: discord.Interaction, charge_id: int
     note = f"{interaction.user.mention}님이 " + ("은행 앱에서 입금을 확인하고 승인했어요." if approve else "거절했어요.")
     if interaction.message is not None:
         await interaction.response.edit_message(embed=charge_embed(charge, note), view=None)
-    else:
+    else:  # approved with /입금 승인: answer the admin and keep a record in the log channel
         await reply(interaction, charge_embed(charge, note))
+        await send_log(interaction.guild, charge_embed(charge, note))
     if approve:
         await dm(charge["user_id"], embed(
             "✅ 충전 완료",
@@ -1673,6 +1669,30 @@ async def dep_link(interaction: discord.Interaction, 입금번호: int, 유저: 
         "✅ 충전 완료", f"**{interaction.guild.name}**에서 **{points:,}원**이 충전됐어요!\n현재 잔액: **{balance:,}원**", COLOR_OK))
     await send_log(interaction.guild, embed(
         "🔗 입금 수동 연결", f"{interaction.user.mention}: 입금 #{입금번호} {dep['amount']:,}원 → {유저.mention} ({points:,}원)", COLOR_OK))
+
+
+@deposit_group.command(name="승인", description="자동으로 확인되지 않은 충전 신청을 직접 승인해요 (은행 앱 확인 필요)")
+@app_commands.describe(신청번호="충전 신청 번호 (신청한 사람의 안내 메시지 아래 '신청 #N')")
+@admin_only()
+async def dep_approve(interaction: discord.Interaction, 신청번호: int):
+    charge = db.get_charge(신청번호)
+    if charge is None or charge["guild_id"] != interaction.guild_id:
+        return await error(interaction, "존재하지 않는 충전 신청이에요.")
+    if charge["status"] != "pending":
+        return await error(interaction, f"대기 중인 신청이 아니에요. (현재 상태: {charge['status']})")
+    await interaction.response.send_modal(ApproveModal(신청번호))
+
+
+@deposit_group.command(name="대기", description="입금을 기다리는 충전 신청 목록을 봐요")
+@admin_only()
+async def dep_pending(interaction: discord.Interaction):
+    rows = db.pending_charges(interaction.guild_id)
+    if not rows:
+        return await reply(interaction, embed("💳 입금 대기 중인 신청", "대기 중인 신청이 없어요."))
+    lines = [f"`#{r['id']}` <@{r['user_id']}> · **{r['depositor']}** · {r['amount']:,}원 · {fmt_time(r['created_at'])}"
+             for r in rows]
+    await reply(interaction, embed(
+        "💳 입금 대기 중인 신청", "\n".join(lines)[:3800] + "\n\n은행 앱에서 입금을 확인했는데 자동 충전이 안 됐다면 `/입금 승인`을 써 주세요."))
 
 
 @deposit_group.command(name="취소", description="승인했지만 실제 입금이 없던 충전을 취소해요 (잔액·금고에서 빠져요)")
