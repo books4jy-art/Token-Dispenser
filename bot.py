@@ -17,6 +17,7 @@ import asyncio
 import datetime
 import hashlib
 import hmac
+import io
 import json
 import logging
 import os
@@ -38,6 +39,7 @@ except ImportError:
 import bank
 import catalog
 import fulfil
+import phone_guide
 from db import Database, ShopError, names_match
 
 # ---------------------------------------------------------------- config ----
@@ -1662,45 +1664,26 @@ async def dep_cancel(interaction: discord.Interaction, 신청번호: int):
     await update_charge_log(신청번호, f"{interaction.user.mention}님이 입금이 없어서 취소했어요.")
 
 
-def phone_guide(url: str) -> str:
-    """Setup steps for whoever owns the bank account's Android phone."""
-    return f"""[토스뱅크 입금 알림 연결 방법] (안드로이드, 약 5분)
-
-1. Play 스토어에서 "MacroDroid" 설치 후 실행 (무료)
-2. "매크로 추가(Add Macro)" 누르기
-3. 트리거(Triggers) ＋ → "알림(Notification)" → "알림 수신(Notification Received)"
-   - 알림 접근 권한을 허용해 주세요
-   - 앱 선택: "토스뱅크"만 체크
-   - 텍스트: "모두(Any)" 선택 → 확인
-4. 동작(Actions) ＋ → "웹 상호작용(Web Interactions)" 또는 "연결(Connectivity)" → "HTTP 요청(HTTP Request)"
-   - 방식(Method): POST
-   - URL: 아래 주소를 그대로 붙여넣기
-   {url}
-   - 본문(Body) 내용: [notification_title] [notification]
-     (오른쪽 "..." 또는 매직 텍스트 버튼에서 '알림 제목', '알림 텍스트'를 넣어도 돼요)
-   - 콘텐츠 유형(Content type): text/plain → 확인
-5. 매크로 이름: "입금 알림 전달" → 저장(✓)
-6. 매크로를 길게 눌러 "테스트(Test macro)" → 관리자에게 "연결 확인" 메시지가 가요
-7. 설정 → 배터리 → MacroDroid를 "제한 없음(최적화 안 함)"으로 바꾸기
-
-※ 토스뱅크 앱의 알림만 이 주소로 보내져요. 다른 앱 알림은 보내지 않아요.
-※ 이 주소는 비밀번호와 같아요. 다른 사람에게 보여 주지 마세요."""
-
-
 @deposit_group.command(name="폰설정", description="은행 계좌 주인에게 보낼 '입금 알림 연결 방법'을 만들어요 (주소 포함)")
 @admin_only()
 async def dep_phone(interaction: discord.Interaction):
     if not WEBHOOK_PUBLIC_URL or not WEBHOOK_SECRET:
         return await error(interaction, "아직 서버에 https 주소가 없어요. 서버에서 `sh deploy/https.sh` 를 먼저 실행해 주세요.")
     url = f"{WEBHOOK_PUBLIC_URL}/deposit?token={WEBHOOK_SECRET}"
-    e = embed(
-        "📱 입금 알림 연결 방법",
-        "아래 내용을 복사해서 **계좌 주인에게만** 보내 주세요. (주소에 비밀번호가 들어 있어요)\n"
-        f"```\n{phone_guide(url)}\n```",
+    how = embed(
+        "📱 계좌 주인에게 보낼 안내",
+        "**보내는 방법** (예: 카카오톡 1:1 대화)\n"
+        "1. 아래 **`입금알림_연결방법.txt` 파일**을 받아서(다운로드) 계좌 주인에게 보내 주세요.\n"
+        "   폰에서 열면 처음부터 끝까지 순서대로 따라 할 수 있게 적혀 있어요.\n"
+        "2. **주소만 따로 한 번 더** 보내 주세요. (아래 회색 칸) 폰에서 길게 눌러 복사하기 쉬워요.\n\n"
+        "⚠️ 주소에 비밀번호가 들어 있어요. **계좌 주인에게만** 보내고, 단체방에는 올리지 마세요.\n\n"
+        "설정이 끝나면 로그 채널에 **📱 입금 알림 폰 연결 확인**이 올라와요.\n"
+        "그다음 1,000원으로 실제 충전을 한 번 해 보세요.",
         COLOR_INFO,
     )
-    e.set_footer(text="설정이 끝나면 로그 채널에 '📱 입금 알림 폰 연결 확인'이 올라와요.")
-    await reply(interaction, e)
+    address = embed("🔗 주소 (이것만 따로 보내기)", f"```\n{url}\n```", COLOR_INFO)
+    file = discord.File(io.BytesIO(phone_guide.guide(url).encode("utf-8")), filename="입금알림_연결방법.txt")
+    await interaction.response.send_message(embeds=[how, address], file=file, ephemeral=True)
 
 
 @deposit_group.command(name="테스트", description="입금 알림 문자가 제대로 읽히는지 확인해요 (실제 충전 안 됨)")
