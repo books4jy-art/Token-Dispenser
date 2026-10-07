@@ -1088,8 +1088,11 @@ async def deposit_webhook(request: web.Request) -> web.Response:
             raw = urllib.parse.unquote_plus(raw)
     text = str(data.get("text") or data.get("message") or data.get("body") or ("" if data else raw))
 
+    # Placeholders the phone app didn't fill in (e.g. a misspelt notification title).
+    unfilled = re.findall(r"\[(?:not|notification)[a-z_]*\]", text)
+    filled = re.sub(r"\[(?:not|notification)[a-z_]*\]", " ", text).strip()
     # MacroDroid's "test macro" sends its placeholders unfilled: treat that as a connection test.
-    if not text.strip() or "[notification" in text or "연결 테스트" in text:
+    if not filled or "연결 테스트" in text:
         received = text.strip()[:200] or "(빈 내용)"
         await send_log(client.get_guild(DEPOSIT_GUILD_ID), embed(
             "📱 입금 알림 폰 연결 확인",
@@ -1099,6 +1102,8 @@ async def deposit_webhook(request: web.Request) -> web.Response:
             COLOR_OK,
         ))
         return web.json_response({"ok": True, "test": True})
+
+    text = filled
 
     amount, name = data.get("amount"), data.get("name") or data.get("depositor")
     if amount is not None and name:
@@ -1115,7 +1120,17 @@ async def deposit_webhook(request: web.Request) -> web.Response:
             # The Toss app also sends payments and ads: only report what looks like a deposit.
             looks_like_deposit = re.search(r"입금|님이.*보냈|받았", text) and not re.search(r"결제|출금|님께|에게", text)
             log.info("입금 웹훅: %s", "입금처럼 보이지만 읽지 못함" if looks_like_deposit else "입금 알림이 아니라서 무시")
-            if looks_like_deposit:
+            if unfilled and "→" in text:
+                # e.g. "송이 → 내 통장" with the title (where Toss puts the amount) missing.
+                await send_log(client.get_guild(DEPOSIT_GUILD_ID), embed(
+                    "⚠️ 입금 금액이 빠진 알림",
+                    f"받은 내용: `{text[:200]}`\n폰에서 보낸 알림에 **알림 제목**(입금 금액)이 빠져 있어요: "
+                    f"`{', '.join(unfilled)}`가 채워지지 않았어요.\n"
+                    "MacroDroid의 HTTP 요청 → 본문에서 이 부분을 지우고, 본문 칸 옆 **[…] 버튼 → '알림 제목'**으로 다시 넣어 주세요.\n"
+                    "이번 입금은 충전 신청의 `입금 확인 (승인)`으로 처리해 주세요.",
+                    COLOR_WARN,
+                ))
+            elif looks_like_deposit:
                 await send_log(client.get_guild(DEPOSIT_GUILD_ID), embed(
                     "⚠️ 읽지 못한 은행 알림",
                     f"```\n{text[:1500]}\n```\n입금 알림이 맞다면 충전 신청의 `입금 확인 (승인)`으로 처리해 주세요. "

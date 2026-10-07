@@ -93,7 +93,13 @@ def parse_deposit(text: str) -> Deposit | None:
         amount = _to_int(amount_match.group(1))
         rest = body[: amount_match.start()] + " " + body[amount_match.end():]
 
-    tokens = re.findall(r"[가-힣]+|[A-Za-z]+", re.sub(r"\[[^\]]*\]", " ", rest))
+    rest = re.sub(r"\[[^\]]*\]", " ", rest)
+    # Toss: "송이 → 내 토스뱅크 통장": the sender is right before the arrow.
+    if "→" in rest:
+        before = [t for t in re.findall(r"[가-힣]+|[A-Za-z]+", rest.split("→")[0]) if _is_name(t)]
+        if before and amount > 0:
+            return Deposit(amount, before[-1])
+    tokens = re.findall(r"[가-힣]+|[A-Za-z]+", rest)
     names = [t for t in tokens if _is_name(t)]
     if not names or amount <= 0:
         return None
