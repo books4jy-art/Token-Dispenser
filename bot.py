@@ -20,6 +20,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 
 import discord
@@ -47,6 +48,8 @@ DEPOSIT_GUILD_ID = int(os.environ.get("DEPOSIT_GUILD_ID", "0") or 0)
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 WEBHOOK_HOST = os.environ.get("WEBHOOK_HOST", "0.0.0.0")
 WEBHOOK_PORT = int(os.environ.get("PORT", os.environ.get("WEBHOOK_PORT", "8080")))
+# The https address phones reach the webhook at (set by deploy/https.sh), e.g. https://myshop.duckdns.org
+WEBHOOK_PUBLIC_URL = os.environ.get("WEBHOOK_PUBLIC_URL", "").rstrip("/")
 # A charge request waits this long for its deposit before it expires.
 CHARGE_EXPIRE_MINUTES = int(os.environ.get("CHARGE_EXPIRE_MINUTES", "60"))
 # Register commands to this server instantly (global registration can take a while).
@@ -1078,6 +1081,15 @@ async def deposit_webhook(request: web.Request) -> web.Response:
         data = dict(await request.post())
     text = str(data.get("text") or data.get("message") or data.get("body") or ("" if data else raw))
 
+    # MacroDroid's "test macro" sends its placeholders unfilled: treat that as a connection test.
+    if not text.strip() or "[notification" in text or "연결 테스트" in text:
+        await send_log(client.get_guild(DEPOSIT_GUILD_ID), embed(
+            "📱 입금 알림 폰 연결 확인",
+            "은행 앱 알림을 보내는 폰이 봇에 연결됐어요. 실제 입금이 들어오면 자동으로 충전돼요.",
+            COLOR_OK,
+        ))
+        return web.json_response({"ok": True, "test": True})
+
     amount, name = data.get("amount"), data.get("name") or data.get("depositor")
     if amount is not None and name:
         try:
@@ -1090,11 +1102,11 @@ async def deposit_webhook(request: web.Request) -> web.Response:
         if parsed is None:
             # Not a deposit (withdrawal, ad…) or a format we can't read. Answer 200 so
             # the phone app doesn't keep retrying; show readable-looking ones to admins.
-            if "입금" in text:
+            if re.search(r"입금|보냈|받았|\d원", text):
                 await send_log(client.get_guild(DEPOSIT_GUILD_ID), embed(
-                    "⚠️ 읽지 못한 입금 알림",
-                    f"```\n{text[:1500]}\n```\n입금이 맞다면 `/잔액관리 지급`으로 직접 처리하고, "
-                    "이 형식을 읽도록 DEPOSIT_REGEX를 설정해 주세요.",
+                    "⚠️ 읽지 못한 은행 알림",
+                    f"```\n{text[:1500]}\n```\n입금 알림이 맞다면 충전 신청의 `입금 확인 (승인)`으로 처리해 주세요. "
+                    "이 형식을 자동으로 읽게 하려면 이 내용을 개발자에게 알려 주세요.",
                     COLOR_WARN,
                 ))
             return web.json_response({"ok": True, "ignored": True})
@@ -1648,6 +1660,47 @@ async def dep_cancel(interaction: discord.Interaction, 신청번호: int):
     await reply(interaction, embed("✅ 충전 취소", note, COLOR_OK))
     await send_log(interaction.guild, embed("🚫 충전 취소", f"{interaction.user.mention}: {note}", COLOR_ERR))
     await update_charge_log(신청번호, f"{interaction.user.mention}님이 입금이 없어서 취소했어요.")
+
+
+def phone_guide(url: str) -> str:
+    """Setup steps for whoever owns the bank account's Android phone."""
+    return f"""[토스뱅크 입금 알림 연결 방법] (안드로이드, 약 5분)
+
+1. Play 스토어에서 "MacroDroid" 설치 후 실행 (무료)
+2. "매크로 추가(Add Macro)" 누르기
+3. 트리거(Triggers) ＋ → "알림(Notification)" → "알림 수신(Notification Received)"
+   - 알림 접근 권한을 허용해 주세요
+   - 앱 선택: "토스뱅크"만 체크
+   - 텍스트: "모두(Any)" 선택 → 확인
+4. 동작(Actions) ＋ → "웹 상호작용(Web Interactions)" 또는 "연결(Connectivity)" → "HTTP 요청(HTTP Request)"
+   - 방식(Method): POST
+   - URL: 아래 주소를 그대로 붙여넣기
+   {url}
+   - 본문(Body) 내용: [notification_title] [notification]
+     (오른쪽 "..." 또는 매직 텍스트 버튼에서 '알림 제목', '알림 텍스트'를 넣어도 돼요)
+   - 콘텐츠 유형(Content type): text/plain → 확인
+5. 매크로 이름: "입금 알림 전달" → 저장(✓)
+6. 매크로를 길게 눌러 "테스트(Test macro)" → 관리자에게 "연결 확인" 메시지가 가요
+7. 설정 → 배터리 → MacroDroid를 "제한 없음(최적화 안 함)"으로 바꾸기
+
+※ 토스뱅크 앱의 알림만 이 주소로 보내져요. 다른 앱 알림은 보내지 않아요.
+※ 이 주소는 비밀번호와 같아요. 다른 사람에게 보여 주지 마세요."""
+
+
+@deposit_group.command(name="폰설정", description="은행 계좌 주인에게 보낼 '입금 알림 연결 방법'을 만들어요 (주소 포함)")
+@admin_only()
+async def dep_phone(interaction: discord.Interaction):
+    if not WEBHOOK_PUBLIC_URL or not WEBHOOK_SECRET:
+        return await error(interaction, "아직 서버에 https 주소가 없어요. 서버에서 `sh deploy/https.sh` 를 먼저 실행해 주세요.")
+    url = f"{WEBHOOK_PUBLIC_URL}/deposit?token={WEBHOOK_SECRET}"
+    e = embed(
+        "📱 입금 알림 연결 방법",
+        "아래 내용을 복사해서 **계좌 주인에게만** 보내 주세요. (주소에 비밀번호가 들어 있어요)\n"
+        f"```\n{phone_guide(url)}\n```",
+        COLOR_INFO,
+    )
+    e.set_footer(text="설정이 끝나면 로그 채널에 '📱 입금 알림 폰 연결 확인'이 올라와요.")
+    await reply(interaction, e)
 
 
 @deposit_group.command(name="테스트", description="입금 알림 문자가 제대로 읽히는지 확인해요 (실제 충전 안 됨)")

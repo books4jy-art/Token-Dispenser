@@ -1,6 +1,6 @@
 # 오라클 클라우드에 봇 올리기 (24시간 무료)
 
-순서: ① 오라클 가입 → ② 서버 만들기 → ③ 봇 설치 → ④ Cloudflare Tunnel로 https 주소 만들기 → ⑤ 휴대폰 연결
+순서: ① 오라클 가입 → ② 서버 만들기 → ③ 봇 설치 → ④ 무료 https 주소 만들기 (DuckDNS) → ⑤ 계좌 주인 폰 연결
 
 ---
 
@@ -26,8 +26,6 @@
      또는 `VM.Standard.E2.1.Micro` (AMD, 메모리 1GB — 이것도 봇에 충분해요)
 4. **SSH 키 추가**: `개인 키 저장`을 눌러 키 파일(`.key`)을 꼭 내려받아 두세요. 잃어버리면 접속할 수 없어요.
 5. **생성** → 상태가 `실행 중`이 되면 **공용 IP 주소**를 복사해요.
-
-> 포트를 열 필요는 없어요. ④의 Cloudflare Tunnel은 서버에서 밖으로 연결하는 방식이라 방화벽 설정이 필요 없어요.
 
 ## ③ 봇 설치
 
@@ -65,33 +63,41 @@ journalctl -u shopbot -f     # "로그인 완료"가 보이면 성공 (Ctrl+C로
 ```
 이제 서버가 재부팅되거나 봇이 오류로 꺼져도 자동으로 다시 켜져요.
 
-## ④ Cloudflare Tunnel로 https 주소 만들기
+## ④ 무료 https 주소 만들기 (DuckDNS)
 
-휴대폰이 봇에게 입금 알림을 보낼 **고정 https 주소**가 필요해요. 도메인이 하나 있어야 해요.
+계좌 주인의 폰이 봇에게 입금 알림을 보낼 **고정 https 주소**가 필요해요. 도메인을 살 필요 없이 무료로 만들 수 있어요.
 
-1. 도메인이 없다면 [Cloudflare Registrar](https://dash.cloudflare.com/?to=/:account/domains/register)에서 구매 (.com 약 $10/년).
-   다른 곳에서 산 도메인이라면 Cloudflare에 사이트를 추가하고 네임서버를 바꿔 주세요.
-2. [Cloudflare 대시보드](https://one.dash.cloudflare.com/) → **Zero Trust → Networks → Tunnels → Create a tunnel**
-3. **Cloudflared** 선택 → 이름 `shopbot` → 환경은 **Debian**
-4. 화면에 나오는 `sudo cloudflared service install eyJ...` 명령을 **복사해서 서버에서 실행**
-   (cloudflared는 설치 스크립트가 이미 설치했으니 설치 명령은 건너뛰고 이 줄만 실행하면 돼요)
-5. **Public Hostname** 추가:
-   - Subdomain: `bot` / Domain: 내 도메인
-   - Service: `HTTP` / URL: `localhost:8080`
-6. 저장 후 브라우저에서 `https://bot.내도메인` 에 접속해 `ok`가 보이면 성공!
+### 1. DuckDNS 이름 만들기
+1. https://www.duckdns.org 접속 → 구글이나 GitHub 계정으로 로그인
+2. **sub domain** 칸에 원하는 이름 입력 (예: `myshop`) → **add domain**
+3. 화면 위쪽의 **token**(긴 문자열)을 복사해 두세요
 
-## ⑤ 휴대폰 연결
+### 2. 오라클에서 80, 443 포트 열기
+1. 오라클 콘솔 → **☰ → 네트워킹 → 가상 클라우드 네트워크 → shopbot-vcn**
+2. **보안 목록(Security Lists)** → **Default Security List for shopbot-vcn**
+3. **수신 규칙 추가(Add Ingress Rules)**:
+   - 소스 CIDR: `0.0.0.0/0`
+   - IP 프로토콜: `TCP`
+   - 대상 포트 범위: `80,443`
+4. **수신 규칙 추가** 버튼으로 저장
 
-서버에서 웹훅 비밀번호를 확인하세요:
+### 3. 서버에서 스크립트 실행
 ```sh
-grep WEBHOOK_SECRET .env
+cd ~/Token-Dispenser && git pull
+sh deploy/https.sh myshop 복사한토큰
 ```
-MacroDroid의 HTTP 요청 주소에 넣어요:
-```
-https://bot.내도메인/deposit?token=WEBHOOK_SECRET값
-```
-나머지 설정은 [README](../README.md)의 "휴대폰 설정"을 보세요.
-디스코드에서 `/입금 테스트`로 은행 알림이 잘 읽히는지 확인하고, 1,000원 정도로 실제 충전을 한 번 해 보세요.
+`✅ 완료! https://myshop.duckdns.org 이 연결됐어요.`가 나오면 성공이에요.
+(방화벽 열기, https 인증서 자동 발급, 봇 설정까지 한 번에 해요.)
+
+## ⑤ 계좌 주인 폰 연결
+
+디스코드에서 **`/입금 폰설정`** 을 실행하면 계좌 주인에게 보낼 안내가 나와요. 주소까지 들어 있으니
+**그대로 복사해서 계좌 주인에게만** 보내 주세요. (주소 안에 비밀번호가 있어요)
+
+계좌 주인은 안드로이드 폰에 MacroDroid(무료)를 깔고 안내대로 매크로 하나만 만들면 돼요 (약 5분).
+- 설정 후 "테스트"를 누르면 로그 채널에 **📱 입금 알림 폰 연결 확인**이 올라와요.
+- 그다음 1,000원 정도로 실제 충전을 한 번 해 보세요. 자동으로 충전되면 끝!
+- 알림을 못 읽으면 로그 채널에 **⚠️ 읽지 못한 은행 알림**과 알림 내용이 올라와요. 그 내용을 알려 주면 읽도록 고쳐 드려요.
 
 ---
 
