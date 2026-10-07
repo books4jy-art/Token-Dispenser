@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>토스뱅크 입금 알림 연결 방법</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  @page { size: A5; margin: 12mm 11mm 13mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Noto Sans KR", "WenQuanYi Zen Hei", sans-serif; color: #1f2329; font-size: 10.6pt; line-height: 1.62; margin: 0; }
+  h1 { font-size: 19pt; font-weight: 900; margin: 0 0 2mm; letter-spacing: -0.3px; }
+  .lead { color: #4b5563; margin: 0 0 4mm; }
+  .time { display: inline-block; background: #eef2ff; color: #3730a3; border-radius: 99px; padding: 0.6mm 3mm; font-size: 9pt; font-weight: 700; }
+  .cover { border-bottom: 2px solid #1f2329; padding-bottom: 4mm; margin-bottom: 5mm; }
+  .box { border-radius: 3mm; padding: 3mm 4mm; margin: 3mm 0; break-inside: avoid; }
+  .info { background: #f3f4f6; }
+  .ok { background: #ecfdf5; border-left: 1.4mm solid #10b981; }
+  .warn { background: #fffbeb; border-left: 1.4mm solid #f59e0b; }
+  .danger { background: #fef2f2; border-left: 1.4mm solid #ef4444; }
+  .box b.t { display: block; margin-bottom: 1mm; }
+  ul { margin: 1mm 0; padding-left: 5mm; }
+  li { margin: 0.6mm 0; }
+  .step { margin: 5mm 0 2mm; }
+  .step h2 { break-after: avoid; }
+  .step h2 { display: flex; align-items: center; gap: 2.5mm; font-size: 13.5pt; font-weight: 900; margin: 0 0 2mm; }
+  .num { flex: none; width: 8mm; height: 8mm; border-radius: 50%; background: #2563eb; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 11pt; }
+  .step h2 small { font-weight: 400; font-size: 9.5pt; color: #6b7280; }
+  ol.taps { margin: 0; padding-left: 0; list-style: none; counter-reset: t; }
+  ol.taps > li { counter-increment: t; position: relative; padding-left: 7mm; margin: 1.6mm 0; break-inside: avoid; }
+  ol.taps > li::before { content: counter(t); position: absolute; left: 0; top: 0.6mm; width: 4.8mm; height: 4.8mm; border-radius: 50%; background: #dbeafe; color: #1d4ed8; font-size: 8pt; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .btn { display: inline-block; border: 1px solid #9ca3af; border-radius: 1.4mm; padding: 0 1.6mm; background: #fff; font-weight: 700; font-size: 9.6pt; white-space: nowrap; }
+  .en { color: #6b7280; font-size: 8.8pt; }
+  .code { font-family: "Noto Sans KR", monospace; background: #111827; color: #f9fafb; border-radius: 2mm; padding: 2.4mm 3mm; margin: 1.6mm 0; font-size: 10.4pt; font-weight: 700; word-break: break-all; letter-spacing: 0.2px; }
+  .field { display: grid; grid-template-columns: 27mm 1fr; gap: 1mm 2mm; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 2mm; padding: 2.4mm 3mm; margin: 1.6mm 0; break-inside: avoid; }
+  .field .k { font-weight: 700; color: #374151; }
+  .red { color: #dc2626; font-weight: 700; }
+  .pb { break-before: page; }
+  .footer { margin-top: 6mm; text-align: center; color: #6b7280; font-size: 9pt; }
+  .check { list-style: none; padding-left: 0; }
+  .check li::before { content: "☐  "; font-weight: 700; color: #2563eb; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>📱 토스뱅크 입금 알림 연결 방법</h1>
+  <p class="lead">이 안내대로 하면 토스뱅크 통장에 입금이 들어올 때 그 알림이 디스코드 봇에 자동으로 전달되고, 봇이 입금한 사람의 잔액을 알아서 충전해 줘요. 처음 해 보셔도 괜찮아요. 천천히 순서대로 따라 하시면 돼요.</p>
+  <span class="time">⏱ 약 10분 · 안드로이드 폰 · 무료</span>
+</div>
+
+<div class="box info">
+  <b class="t">시작하기 전에 알아 두세요</b>
+  <ul>
+    <li><b>안드로이드 폰</b>에서만 할 수 있어요. (아이폰은 안 돼요)</li>
+    <li>이 폰에 <b>토스뱅크 앱</b>이 설치되어 있고 로그인되어 있어야 해요.</li>
+    <li>관리자에게 <b>"연결 주소"</b>를 따로 받아 두세요. (4단계에서 붙여넣어요)</li>
+  </ul>
+</div>
+
+<div class="box ok">
+  <b class="t">🔒 무엇이 전달되나요?</b>
+  봇에게는 <b>토스뱅크 앱의 알림 내용</b>(예: "홍길동님이 10,000원을 보냈어요")만 전달돼요.
+  다른 앱 알림, 문자, 사진, 계좌 비밀번호·로그인 정보는 <b>절대 전달되지 않아요.</b>
+  MacroDroid에서 매크로를 끄면 언제든 바로 멈춰요.
+</div>
+
+<div class="step">
+  <h2><span class="num">0</span>토스뱅크 알림 켜기</h2>
+  <ol class="taps">
+    <li>폰의 <span class="btn">설정</span> → <span class="btn">애플리케이션</span> → <span class="btn">토스뱅크</span> → <span class="btn">알림</span> 에서 알림이 <b>켜짐</b>인지 확인해요.</li>
+    <li>토스뱅크 앱 안에서도 <span class="btn">전체</span> → <span class="btn">설정</span> → <span class="btn">알림</span> 에서 <b>입출금 알림</b>이 켜져 있는지 확인해요.</li>
+  </ol>
+  <div class="box ok">✅ 입금되면 폰 위쪽에 <b>"○○○님이 10,000원을 보냈어요"</b> 같은 알림이 뜨면 준비 완료!</div>
+</div>
+
+<div class="step">
+  <h2><span class="num">1</span>MacroDroid 앱 설치</h2>
+  <ol class="taps">
+    <li><span class="btn">Play 스토어</span>를 열고 검색창에 <b>MacroDroid</b> 를 입력해요.</li>
+    <li>로봇 모양 아이콘의 <b>"MacroDroid - 기기 자동화"</b> 를 <span class="btn">설치</span> 해요. (무료)</li>
+    <li>앱을 열면 소개 화면이 나와요. <span class="btn">건너뛰기</span> 또는 <span class="btn">다음</span> 으로 넘어가요.</li>
+  </ol>
+  <div class="box warn">💡 유료 버전(Pro) 안내가 나와도 그냥 닫으세요. <b>무료 버전으로 충분해요.</b></div>
+</div>
+
+<div class="step">
+  <h2><span class="num">2</span>새 매크로 만들기</h2>
+  <ol class="taps">
+    <li>첫 화면에서 <span class="btn">매크로 추가</span> <span class="en">(Add Macro)</span> 를 눌러요.</li>
+    <li>위쪽 <b>매크로 이름</b> 칸에 <b>입금 알림 전달</b> 이라고 적어요.</li>
+  </ol>
+  <div class="box ok">✅ 화면에 <b style="color:#dc2626">빨간색 '트리거'</b>, <b style="color:#2563eb">파란색 '동작'</b>, <b style="color:#059669">초록색 '제약 조건'</b> 칸이 보이면 성공!</div>
+</div>
+
+<div class="step">
+  <h2><span class="num">3</span>트리거 설정 <small>"토스뱅크 알림이 오면"</small></h2>
+  <ol class="taps">
+    <li>빨간색 <b>트리거</b> 칸 오른쪽의 <span class="btn">＋</span> 를 눌러요.</li>
+    <li>위쪽 <b>돋보기(🔍)</b>를 눌러 <b>알림</b> 이라고 검색 → <span class="btn">알림</span> <span class="en">(Notification)</span> 을 눌러요.</li>
+    <li><span class="btn">알림 수신</span> <span class="en">(Notification Received)</span> 을 고르고 <span class="btn">확인</span>.</li>
+    <li>"알림 접근 권한이 필요해요" 창이 뜨면 <span class="btn">확인</span> → 설정 화면에서 <b>MacroDroid</b> 스위치를 <b>켜고</b> → 뒤로 가기로 돌아와요.</li>
+    <li><span class="btn">앱 선택</span> 을 고르고 목록에서 <b class="red">토스뱅크만</b> 체크 → <span class="btn">확인</span>.</li>
+    <li><b>텍스트 내용</b>은 <span class="btn">모두</span> <span class="en">(Any)</span> 를 고르고 <span class="btn">확인</span>.</li>
+  </ol>
+  <div class="box ok">✅ 빨간 트리거 칸에 <b>'알림 수신 (토스뱅크)'</b> 가 보이면 성공!</div>
+  <div class="box danger">⚠️ 다른 앱(카카오톡 등)은 <b>절대 체크하지 마세요.</b></div>
+</div>
+
+<div class="step">
+  <h2><span class="num">4</span>동작 설정 <small>"알림 내용을 봇에게 보내기"</small></h2>
+  <ol class="taps">
+    <li>파란색 <b>동작</b> 칸 오른쪽의 <span class="btn">＋</span> 를 눌러요.</li>
+    <li>위쪽 <b>돋보기(🔍)</b>를 눌러 <b>HTTP</b> 라고 검색 → <span class="btn">HTTP 요청</span> <span class="en">(HTTP Request)</span> 을 눌러요.</li>
+    <li>설정 화면에서 아래 3가지를 채워요.</li>
+  </ol>
+
+  <div class="field"><span class="k">① 요청 방법</span><span><b>POST</b> 를 골라요. <span class="en">(Request Method)</span></span></div>
+
+  <div class="field"><span class="k">② URL</span><span>관리자가 보내 준 <b>연결 주소</b>를 길게 눌러 <b>복사</b> → URL 칸을 길게 눌러 <b>붙여넣기</b>.<br>
+    <span class="red">한 글자도 빠지면 안 돼요.</span> 주소는 이렇게 생겼어요:<br>
+    <span class="en">https://○○○.duckdns.org/deposit?token=…</span></span></div>
+
+  <div class="field"><span class="k">③ 본문 내용</span><span>아래쪽 <b>콘텐츠 본문</b> <span class="en">(Content Body)</span> 에서<br>
+    • 콘텐츠 유형: <b>text/plain</b><br>
+    • 본문 칸에 아래 글자를 <b>대괄호까지 똑같이</b> 적어요:</span></div>
+  <div class="code">[notification_title] [notification]</div>
+  <div class="box warn">💡 적기 어려우면 본문 칸 옆의 <span class="btn">…</span> 버튼을 눌러 <b>'알림 제목'</b> 과 <b>'알림 텍스트'</b> 를 차례로 넣어도 똑같아요.</div>
+
+  <ol class="taps" start="4" style="counter-reset: t 3;">
+    <li>오른쪽 위 <span class="btn">✓</span> 또는 <span class="btn">확인</span> 을 눌러요.</li>
+  </ol>
+  <div class="box ok">✅ 파란 동작 칸에 <b>'HTTP 요청 (POST)'</b> 가 보이면 성공!</div>
+</div>
+
+<div class="step">
+  <h2><span class="num">5</span>저장하기</h2>
+  <ol class="taps">
+    <li>저장 버튼(<span class="btn">✓</span> 또는 💾 디스크 모양)을 눌러요.</li>
+    <li>매크로 목록에 <b>'입금 알림 전달'</b> 이 생기고 <b>스위치가 켜져 있는지</b> 확인해요.</li>
+  </ol>
+</div>
+
+<div class="step">
+  <h2><span class="num">6</span>연결 테스트</h2>
+  <ol class="taps">
+    <li>매크로 목록에서 <b>'입금 알림 전달'</b> 을 <b>길게</b> 눌러요. (또는 매크로를 열고 오른쪽 위 <span class="btn">⋮</span>)</li>
+    <li><span class="btn">테스트 매크로</span> <span class="en">(Test Macro / 동작 테스트)</span> 를 눌러요.</li>
+    <li>관리자에게 <b>"테스트 눌렀어요"</b> 라고 알려 주세요.</li>
+  </ol>
+  <div class="box ok">✅ 관리자 쪽 디스코드에 <b>"📱 입금 알림 폰 연결 확인"</b> 이 뜨면 연결 성공이에요!</div>
+</div>
+
+<div class="step">
+  <h2><span class="num">7</span>꺼지지 않게 설정 <small>아주 중요해요!</small></h2>
+  <p style="margin:0 0 2mm">폰이 배터리를 아끼려고 MacroDroid를 몰래 끄면 알림이 전달되지 않아요.</p>
+  <ol class="taps">
+    <li>폰 <span class="btn">설정</span> → <span class="btn">애플리케이션</span> → <span class="btn">MacroDroid</span></li>
+    <li><span class="btn">배터리</span> → <span class="btn">제한 없음</span> <span class="en">(또는 '최적화 안 함')</span> 으로 바꿔요.</li>
+    <li><b>삼성 폰</b>이라면: <span class="btn">설정</span> → <span class="btn">배터리</span> → <span class="btn">백그라운드 사용 한도</span> 에서 <b>'사용하지 않는 앱을 절전 상태로 전환'</b>을 끄거나, <b>절전 예외 앱</b>에 MacroDroid를 추가해요.</li>
+  </ol>
+  <div class="box info">💡 최근 앱 목록에서 MacroDroid 화면을 닫아도 괜찮아요. 매크로는 계속 일해요.</div>
+</div>
+
+<div class="step" style="break-inside: avoid">
+  <h2><span class="num">✓</span>마지막 확인</h2>
+  <ul class="check">
+    <li>토스뱅크 입출금 알림이 켜져 있다</li>
+    <li>매크로 '입금 알림 전달' 스위치가 켜져 있다</li>
+    <li>트리거에 <b>토스뱅크만</b> 선택되어 있다</li>
+    <li>테스트 후 관리자가 "연결 확인"을 받았다</li>
+    <li>MacroDroid 배터리 설정이 '제한 없음'이다</li>
+  </ul>
+</div>
+
+<div class="box info">
+  <b class="t">평소에 지켜 주세요</b>
+  <ul>
+    <li>폰은 <b>켜져 있고</b> 와이파이나 데이터가 <b>연결</b>되어 있어야 해요.</li>
+    <li>토스뱅크 앱에서 로그아웃하거나 알림을 끄면 안 돼요.</li>
+    <li>폰을 바꾸거나 초기화하면 이 설정을 다시 해야 해요.</li>
+  </ul>
+</div>
+
+<div class="box warn">
+  <b class="t">잘 안 될 때</b>
+  <ul>
+    <li><b>테스트했는데 연결 확인이 안 와요</b> → URL을 정확히 붙여넣었는지(앞뒤 공백 없이), 인터넷이 켜져 있는지 확인해요.</li>
+    <li><b>입금했는데 자동 충전이 안 돼요</b> → 0단계(알림 켜기)와 7단계(배터리)를 다시 확인하고 관리자에게 알려 주세요. 관리자가 직접 충전해 줄 수 있어요.</li>
+    <li><b>메뉴 이름이 달라요</b> → 폰 기종이나 앱 버전마다 조금 달라요. 비슷한 이름을 찾거나, 화면을 캡처해서 관리자에게 보내 주세요.</li>
+  </ul>
+</div>
+
+<div class="box danger">
+  <b class="t">🔒 보안 — 꼭 지켜 주세요</b>
+  관리자가 보내 준 <b>연결 주소에는 비밀번호가 들어 있어요.</b> 다른 사람에게 보내거나, 단체 대화방·SNS에 올리지 마세요.
+</div>
+
+<p class="footer">도와주셔서 감사합니다! 🙏</p>
+</body>
+</html>

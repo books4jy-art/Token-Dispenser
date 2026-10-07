@@ -17,7 +17,6 @@ import asyncio
 import datetime
 import hashlib
 import hmac
-import io
 import json
 import logging
 import os
@@ -39,7 +38,6 @@ except ImportError:
 import bank
 import catalog
 import fulfil
-import phone_guide
 from db import Database, ShopError, names_match
 
 # ---------------------------------------------------------------- config ----
@@ -1664,6 +1662,9 @@ async def dep_cancel(interaction: discord.Interaction, 신청번호: int):
     await update_charge_log(신청번호, f"{interaction.user.mention}님이 입금이 없어서 취소했어요.")
 
 
+GUIDE_PDF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "입금알림_연결방법.pdf")
+
+
 @deposit_group.command(name="폰설정", description="은행 계좌 주인에게 보낼 '입금 알림 연결 방법'을 만들어요 (주소 포함)")
 @admin_only()
 async def dep_phone(interaction: discord.Interaction):
@@ -1673,16 +1674,17 @@ async def dep_phone(interaction: discord.Interaction):
     how = embed(
         "📱 계좌 주인에게 보낼 안내",
         "**보내는 방법** (예: 카카오톡 1:1 대화)\n"
-        "1. 아래 **`입금알림_연결방법.txt` 파일**을 받아서(다운로드) 계좌 주인에게 보내 주세요.\n"
-        "   폰에서 열면 처음부터 끝까지 순서대로 따라 할 수 있게 적혀 있어요.\n"
-        "2. **주소만 따로 한 번 더** 보내 주세요. (아래 회색 칸) 폰에서 길게 눌러 복사하기 쉬워요.\n\n"
+        "1. 아래 **`입금알림_연결방법.pdf`** 를 받아서(다운로드) 계좌 주인에게 보내 주세요.\n"
+        "   그림과 함께 처음부터 끝까지 순서대로 따라 할 수 있게 적혀 있어요.\n"
+        "2. **연결 주소**(아래 회색 칸)를 메시지로 따로 보내 주세요. 안내서 4단계에서 붙여넣어요.\n"
+        "   (안내서에는 주소가 들어 있지 않아서 안내서는 안전하게 다시 써도 돼요)\n\n"
         "⚠️ 주소에 비밀번호가 들어 있어요. **계좌 주인에게만** 보내고, 단체방에는 올리지 마세요.\n\n"
         "설정이 끝나면 로그 채널에 **📱 입금 알림 폰 연결 확인**이 올라와요.\n"
         "그다음 1,000원으로 실제 충전을 한 번 해 보세요.",
         COLOR_INFO,
     )
-    address = embed("🔗 주소 (이것만 따로 보내기)", f"```\n{url}\n```", COLOR_INFO)
-    file = discord.File(io.BytesIO(phone_guide.guide(url).encode("utf-8")), filename="입금알림_연결방법.txt")
+    address = embed("🔗 연결 주소 (메시지로 따로 보내기)", f"```\n{url}\n```", COLOR_INFO)
+    file = discord.File(GUIDE_PDF, filename="입금알림_연결방법.pdf")
     await interaction.response.send_message(embeds=[how, address], file=file, ephemeral=True)
 
 
