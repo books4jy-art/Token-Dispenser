@@ -9,6 +9,7 @@ save is downloaded:
   "atleast":      {"catfood": 100000}           -> raised to this amount (never lowered)
   "fruit_add":    200   -> +200 of every catfruit (not seeds); "fruitseed_add" also seeds
   "stone_add":    200   -> +200 of every behemoth stone (not gems); "stonegem_add" also gems
+  "stonegem_fill": 998  -> every behemoth stone and gem set to 998 (the game caps it there)
   "catseyes_set": 9999  -> every catseye type set to this; "catseyes_add" adds
   "battle_add":   998   -> + to every battle item
   "drink_add":    999   -> + to every Catamin (drink)
@@ -20,7 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 BEHEMOTH_GROUP = 9  # same as worker.BEHEMOTH_GROUP
-GAME_DATA_KEYS = ("fruit_add", "fruitseed_add", "stone_add", "stonegem_add", "helpers_top")
+GAME_DATA_KEYS = ("fruit_add", "fruitseed_add", "stone_add", "stonegem_add", "stonegem_fill", "helpers_top")
 
 
 def needs_game_data(edits: dict[str, Any]) -> bool:
@@ -37,7 +38,8 @@ def expand(core: Any, save: Any, edits: dict[str, Any]) -> dict[str, Any]:
 
     fruit_add, stone_add = edits.pop("fruit_add", None), edits.pop("stone_add", None)
     fruitseed_add, stonegem_add = edits.pop("fruitseed_add", None), edits.pop("stonegem_add", None)
-    if fruit_add or stone_add or fruitseed_add or stonegem_add:
+    stonegem_fill = edits.pop("stonegem_fill", None)
+    if fruit_add or stone_add or fruitseed_add or stonegem_add or stonegem_fill:
         matatabi = core.Matatabi(save).matatabi
         if not matatabi:
             raise RuntimeError("게임 데이터를 내려받지 못했어요 — 나중에 다시 시도하세요")
@@ -50,6 +52,8 @@ def expand(core: Any, save: Any, edits: dict[str, Any]) -> dict[str, Any]:
                 items[i] = int(save.catfruit[i]) + int(fruitseed_add)
             elif fruit_add and not behemoth and not fr.seed:
                 items[i] = int(save.catfruit[i]) + int(fruit_add)
+            elif stonegem_fill and behemoth:
+                items[i] = max(int(save.catfruit[i]), int(stonegem_fill))
             elif stonegem_add and behemoth:
                 items[i] = int(save.catfruit[i]) + int(stonegem_add)
             elif stone_add and behemoth and fr.sort < 300:
