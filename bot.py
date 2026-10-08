@@ -250,7 +250,8 @@ async def show_category(interaction: discord.Interaction, category: str, edit: b
         price = db.price_for(interaction.guild_id, interaction.user.id, p)
         e.add_field(
             name=f"{p.name} — {price_label(p, price)}",
-            value=(f"{p.description}\n" if p.description else "") + f"`{product_note(p)}`",
+            value=(f"**{catalog.RISK_LABEL[p.risk]}**\n" if p.risk in catalog.RISK_LABEL else "")
+            + (f"{p.description}\n" if p.description else "") + f"`{product_note(p)}`",
             inline=False,
         )
     view = ShopView(products, back=len(categories(db.list_products(interaction.guild_id))) > 1)
@@ -292,6 +293,7 @@ class ShopView(discord.ui.View):
                     price_label(p).replace("~~", "")
                     + (" · 품절" if p.kind == "stock" and p.stock == 0 else "")
                     + (f" · {p.sale_hours()}" if p.sale_hours() else "")
+                    + (f" · {catalog.RISK_LABEL[p.risk]}" if p.risk in catalog.RISK_LABEL else "")
                 )[:100],
                 value=str(p.id),
             )
@@ -341,7 +343,7 @@ class OrderModal(discord.ui.Modal):
         self.qty = self.code = self.pin = self.detail = None
         self.mode = fulfil.quantity_mode(product.auto)
         # Character and treasure items count the names / chapters typed instead.
-        if product.unit and product.kind != "stock" and self.mode not in ("cats", "chapters"):
+        if product.unit and product.kind != "stock" and not fulfil.picks_names(self.mode):
             self.qty = discord.ui.TextInput(
                 label=f"수량 ({product.unit} 단위, 최대 {product.max_qty})"[:45],
                 placeholder=f"예: 1 → {product.unit}, 2 → {product.unit} × 2", default="1", max_length=4,
@@ -353,7 +355,7 @@ class OrderModal(discord.ui.Modal):
             self.add_item(self.code)
             self.add_item(self.pin)
         # Automatic items only take details they can act on (character names, chapters).
-        if product.form is not None and (self.mode is None or self.mode in ("cats", "chapters")):
+        if product.form is not None and (self.mode is None or fulfil.picks_names(self.mode)):
             self.detail = discord.ui.TextInput(
                 label=(product.form or "요청사항 (선택)")[:45], style=discord.TextStyle.paragraph,
                 required=bool(product.form), max_length=500,
@@ -374,10 +376,14 @@ class OrderModal(discord.ui.Modal):
         if self.code is not None and self.mode is not None:
             # Automatic: the codes go only into the job (never into the admin log).
             picks: list[int] = []
-            if self.mode in ("cats", "chapters"):
+            if fulfil.picks_names(self.mode):
                 if self.mode == "cats":
                     picks, problem = cat_names.resolve(detail)
                     shown = ", ".join(f"{cat_names.name(i)} (#{i})" for i in picks)
+                elif self.mode.startswith("era:"):
+                    era = self.mode.split(":", 1)[1]
+                    picks, problem = fulfil.parse_era_chapters(era, detail)
+                    shown = fulfil.era_chapter_names(era, picks)
                 else:
                     picks, problem = fulfil.parse_chapters(detail)
                     shown = fulfil.chapter_names(picks)
@@ -430,6 +436,8 @@ async def confirm_purchase(interaction: discord.Interaction, product, quantity: 
         )
     elif request:
         e.add_field(name="입력한 정보", value="코드와 요청 내용은 관리자에게만 전달돼요.", inline=False)
+    if product.risk in catalog.RISK_TEXT:
+        e.add_field(name=catalog.RISK_LABEL[product.risk], value=catalog.RISK_TEXT[product.risk], inline=False)
     await interaction.response.send_message(
         embed=e, view=ConfirmBuyView(product.id, quantity, request, job), ephemeral=True
     )
@@ -586,7 +594,7 @@ async def fulfil_order(order_id: int) -> None:
         edits = fulfil.build_edits(job["auto"], int(job["quantity"]), job.get("picks") or [])
         result = await fulfil.run_worker({
             "mode": "codes", "transfer_code": job["code"], "confirmation_code": job["pin"],
-            "cc": fulfil.GAME_CC, "edits": edits,
+            "cc": fulfil.GAME_CC, "edits": edits, "unlimited": fulfil.is_unlimited(job["auto"]),
         })
     except Exception as exc:  # noqa: BLE001 - never leave an order stuck in "running"
         log.exception("자동 처리 오류 (주문 #%s)", order_id)
@@ -1513,14 +1521,15 @@ async def prod_list(interaction: discord.Interaction):
     await reply(interaction, embed("📦 상품 목록", "\n".join(lines)[:4000]))
 
 
-@product_group.command(name="기본목록", description="냥코 서비스 상품 목록을 한 번에 등록해요 (이미 있는 이름은 건너뜀)")
+@product_group.command(name="기본목록", description="상점을 냥코 서비스 기본 가격표로 바꿔요 (예전 상품은 판매 중지)")
 @money_only()
 async def prod_catalog(interaction: discord.Interaction):
-    added, skipped = db.add_catalog(interaction.guild_id, catalog.CATALOG)
+    added, updated, removed = db.add_catalog(interaction.guild_id, catalog.CATALOG)
     await reply(interaction, embed(
-        "✅ 기본 상품 등록",
-        f"{added}개를 등록했어요." + (f" (이미 있는 {skipped}개는 건너뜀)" if skipped else "")
-        + "\n`/상품 목록`으로 확인하고, `/상품 수정`으로 가격·수량을 바꿀 수 있어요.",
+        "✅ 기본 가격표 적용",
+        f"새로 등록 {added}개 · 가격/설정 갱신 {updated}개 · 판매 중지 {removed}개"
+        + "\n`/상품 목록`으로 확인하고, `/상품 수정`으로 가격·수량을 바꿀 수 있어요."
+        + "\n⚠️ 표시가 있는 상품은 게임 최대치를 넘겨서 밴 위험이 있다고 구매자에게 안내돼요.",
         COLOR_OK,
     ))
 

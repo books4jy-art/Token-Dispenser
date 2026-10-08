@@ -111,6 +111,8 @@ MIGRATIONS = {
         "form": "TEXT",                               # NULL = no order form, '' = game codes only,
                                                       # other text = codes + a required field with that label
         "auto": "TEXT",                               # fulfil.AUTO key: the bot edits the save itself
+        "risk": "TEXT NOT NULL DEFAULT ''",          # '' | some | high: ban-risk warning (catalog.RISK_TEXT)
+        "position": "INTEGER",                        # order in the shop (catalog items); NULL = by id
     },
     "orders": {
         "quantity": "INTEGER NOT NULL DEFAULT 1",
@@ -145,6 +147,7 @@ class Product:
     sale_end: int | None = None
     form: str | None = None
     auto: str | None = None
+    risk: str = ""
 
     def on_sale(self, hour: int) -> bool:
         """Whether the item can be bought at this KST hour (0–23)."""
@@ -277,7 +280,7 @@ class Database:
             description=row["description"], kind=row["kind"], role_id=row["role_id"],
             active=bool(row["active"]), stock=row["stock_count"], category=row["category"],
             unit=row["unit"], max_qty=row["max_qty"], sale_start=row["sale_start"],
-            sale_end=row["sale_end"], form=row["form"], auto=row["auto"],
+            sale_end=row["sale_end"], form=row["form"], auto=row["auto"], risk=row["risk"] or "",
         )
 
     def get_product(self, guild_id: int, product_id: int) -> Product | None:
@@ -287,7 +290,7 @@ class Database:
         sql = "SELECT id FROM products WHERE guild_id=? AND kind != 'lifetime'"
         if not include_inactive:
             sql += " AND active=1"
-        ids = [r["id"] for r in self._conn.execute(sql + " ORDER BY id", (guild_id,))]
+        ids = [r["id"] for r in self._conn.execute(sql + " ORDER BY position IS NULL, position, id", (guild_id,))]
         return [p for i in ids if (p := self._product(self._conn, i, guild_id))]
 
     def add_product(
@@ -314,36 +317,45 @@ class Database:
         )
         return cur.lastrowid
 
-    def add_catalog(self, guild_id: int, items: list[dict]) -> tuple[int, int]:
-        """Add catalog items, skipping names already on sale. Returns (added, skipped)."""
-        added = skipped = 0
+    def add_catalog(self, guild_id: int, items: list[dict]) -> tuple[int, int, int]:
+        """Make the shop this list. Items with the same name are updated (price included), new
+        ones added, and every other 수동/자동 처리 item taken off sale (orders keep their history).
+        Returns (added, updated, removed)."""
+        added = updated = 0
         with self._tx() as c:
             existing = {
-                r["name"] for r in c.execute(
-                    "SELECT name FROM products WHERE guild_id=? AND active=1", (guild_id,)
+                r["name"]: r["id"] for r in c.execute(
+                    "SELECT id, name FROM products WHERE guild_id=? AND active=1 AND kind='manual'", (guild_id,)
                 )
             }
-            for item in items:
+            keep: set[int] = set()
+            for position, item in enumerate(items):
+                values = (item["price"], item.get("description", ""), item.get("category", "기타"),
+                          item.get("auto"), item.get("unit", ""), max(1, item.get("max_qty", 1)),
+                          item.get("form"), item.get("sale_start"), item.get("sale_end"),
+                          item.get("risk", ""), position)
                 if item["name"] in existing:
-                    # Keep the admin's price, category and description; refresh how it's sold.
+                    pid = existing[item["name"]]
                     c.execute(
-                        "UPDATE products SET auto=?, unit=?, max_qty=?, form=?, sale_start=?, sale_end=?, "
-                        "description=CASE WHEN description='' THEN ? ELSE description END "
-                        "WHERE guild_id=? AND name=? AND active=1",
-                        (item.get("auto"), item.get("unit", ""), max(1, item.get("max_qty", 1)),
-                         item.get("form"), item.get("sale_start"), item.get("sale_end"),
-                         item.get("description", ""), guild_id, item["name"]),
+                        "UPDATE products SET price=?, description=?, category=?, auto=?, unit=?, max_qty=?, "
+                        "form=?, sale_start=?, sale_end=?, risk=?, position=? WHERE id=?",
+                        (*values, pid),
                     )
-                    skipped += 1
-                    continue
-                self._insert_product(
-                    c, guild_id, item["name"], item["price"], item.get("description", ""),
-                    item.get("kind", "manual"), None, item.get("category", "기타"),
-                    item.get("unit", ""), item.get("max_qty", 1), item.get("sale_start"),
-                    item.get("sale_end"), item.get("form"), item.get("auto"),
-                )
-                added += 1
-        return added, skipped
+                    updated += 1
+                else:
+                    pid = self._insert_product(
+                        c, guild_id, item["name"], item["price"], item.get("description", ""),
+                        item.get("kind", "manual"), None, item.get("category", "기타"),
+                        item.get("unit", ""), item.get("max_qty", 1), item.get("sale_start"),
+                        item.get("sale_end"), item.get("form"), item.get("auto"),
+                    )
+                    c.execute("UPDATE products SET risk=?, position=? WHERE id=?",
+                              (item.get("risk", ""), position, pid))
+                    added += 1
+                keep.add(pid)
+            gone = [pid for pid in existing.values() if pid not in keep]
+            c.executemany("UPDATE products SET active=0 WHERE id=?", [(pid,) for pid in gone])
+        return added, updated, len(gone)
 
     def update_product(self, guild_id: int, product_id: int, **fields: object) -> bool:
         """Change product fields. None = leave as is; -1 for sale_start/sale_end clears them."""

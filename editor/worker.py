@@ -44,6 +44,7 @@ from importlib import resources  # noqa: E402
 import bcsfe  # noqa: E402
 import extras  # noqa: E402
 import shop_edits  # noqa: E402
+import unlimited  # noqa: E402
 from bcsfe import core  # noqa: E402
 
 # Numeric fields: (save attribute, max-value key, managed item type or None).
@@ -950,6 +951,8 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
     core.set_log_path(core.Path(os.path.join(job_dir, "bcsfe.log")))
     core.set_transfer_backup_path(core.Path(os.path.join(job_dir, "original_SAVE_DATA")))
     core.core_data.init_data()
+    if job.get("unlimited"):
+        unlimited.install(core)  # this item is sold past the game's limits
 
     cc = core.CountryCode.from_code(job["cc"]) if job.get("cc") else None
     result: dict[str, Any] = {"ok": False}

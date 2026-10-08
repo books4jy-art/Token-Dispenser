@@ -30,44 +30,95 @@ BACKUP_DAYS = 14
 
 STORY = {"world": [0, 1, 2], "future": [3, 4, 5], "cosmos": [6, 7, 8]}
 STORY_NAMES = {"세계": 0, "미래": 3, "우주": 6}
+ERA_NAMES = {"world": "세계편", "future": "미래편", "cosmos": "우주편"}
 
-# auto key -> (edits builder, how the quantity is chosen: "number" | "cats" | "chapters" | "fixed")
-AUTO: dict[str, tuple[Callable[[int, list[int]], dict[str, Any]], str]] = {
-    "catfood_45000": (lambda q, x: {"catfood": 45000}, "fixed"),
-    "rare_tickets_299": (lambda q, x: {"rare_tickets": 299}, "fixed"),
-    "normal_tickets_2999": (lambda q, x: {"normal_tickets": 2999}, "fixed"),
-    "platinum_tickets": (lambda q, x: {"add": {"platinum_tickets": q}}, "number"),
-    "legend_tickets": (lambda q, x: {"add": {"legend_tickets": q}}, "number"),
-    "np_9999": (lambda q, x: {"np": 9999}, "fixed"),
-    "fruit": (lambda q, x: {"fruit_add": 200 * q}, "number"),
-    "stones": (lambda q, x: {"stone_add": 200 * q}, "number"),
-    "xp": (lambda q, x: {"add": {"xp": 100_000_000 * q}}, "number"),
-    "catseyes_9999": (lambda q, x: {"catseyes_set": 9999}, "fixed"),
-    "story_world": (lambda q, x: {"clear_story": True, "story_chapters": STORY["world"]}, "fixed"),
-    "story_future": (lambda q, x: {"clear_story": True, "story_chapters": STORY["future"]}, "fixed"),
-    "story_cosmos": (lambda q, x: {"clear_story": True, "story_chapters": STORY["cosmos"]}, "fixed"),
-    "treasure": (lambda q, x: {"story_chapters": x, "treasure_level": 3}, "chapters"),
-    "all_cats_unlock": (lambda q, x: {"unlock_cats": True}, "fixed"),
+Builder = Callable[[int, list[int]], dict[str, Any]]
+
+
+def _story(era: str) -> Builder:
+    """Picked chapters of one era (picks are 0, 1, 2): cleared, treasures at the best level."""
+    return lambda q, x: {"clear_story": True, "story_chapters": [STORY[era][i] for i in x], "treasure_level": 3}
+
+
+EVOLVE = {"true": "evolve", "fourth": "evolve"}  # 3rd and 4th forms, where the character has them
+
+# auto key -> (edits builder, how the quantity is chosen, unlimited)
+#   how: "number" | "cats" | "chapters" (보물작, any era) | "era:<world|future|cosmos>" | "fixed"
+#   unlimited: the editor runs with the Unlimited editor's limits (storage maxima, not the game's).
+AUTO: dict[str, tuple[Builder, str, bool]] = {
+    # ---- 재화
+    "catfood_45000": (lambda q, x: {"atleast": {"catfood": 45_000}}, "fixed", False),
+    "catfood_100k": (lambda q, x: {"atleast": {"catfood": 100_000}}, "fixed", True),
+    "catfood_1m": (lambda q, x: {"atleast": {"catfood": 1_000_000}}, "fixed", True),
+    "catfood_2100m": (lambda q, x: {"atleast": {"catfood": 2_100_000_000}}, "fixed", True),
+    "xp_add": (lambda q, x: {"add": {"xp": 100_000_000 * q}}, "number", True),
+    "np_add": (lambda q, x: {"add": {"np": 1000 * q}}, "number", True),
+    "catseyes_add": (lambda q, x: {"catseyes_add": 998 * q}, "number", True),
+    "fruitseed_add": (lambda q, x: {"fruitseed_add": 998 * q}, "number", True),
+    "stonegem_add": (lambda q, x: {"stonegem_add": 1000 * q}, "number", True),
+    "leadership_add": (lambda q, x: {"add": {"leadership": 999 * q}}, "number", True),
+    "orbs_998": (lambda q, x: {"orbs": {"all": True, "count": 998}}, "fixed", False),
+    "battle_add": (lambda q, x: {"battle_add": 998 * q}, "number", True),
+    "drink_add": (lambda q, x: {"drink_add": 999 * q}, "number", True),
+    "skills_max": (lambda q, x: {"skills": {"base": "max", "plus": "max", "all": True, "ids": []}}, "fixed", False),
+    # ---- 캐릭터
+    "all_cats_unlock": (lambda q, x: {"unlock_cats": True}, "fixed", False),
     "all_cats_upgrade": (lambda q, x: {"upgrade": {"target": "all", "base": "max", "plus": "max"},
-                                       "rank_caps": True}, "fixed"),
-    "all_cats_talents": (lambda q, x: {"forms": {"talents": "max", "target": "all", "ids": []}}, "fixed"),
-    "cat_add": (lambda q, x: {"add_cats": x}, "cats"),
-    "cat_remove": (lambda q, x: {"remove_cats": x}, "cats"),
+                                       "rank_caps": True}, "fixed", False),
+    "all_cats_evolve": (lambda q, x: {"forms": {**EVOLVE, "target": "all", "ids": []}}, "fixed", False),
+    "cat_add": (lambda q, x: {"add_cats": x}, "cats", False),
+    "cat_remove": (lambda q, x: {"remove_cats": x}, "cats", False),
     "cat_upgrade": (lambda q, x: {"upgrade": {"target": "picked", "base": "max", "plus": "max", "ids": x},
-                                  "rank_caps": True}, "cats"),
-    "cat_evolve": (lambda q, x: {"forms": {"true": "evolve", "target": "picked", "ids": x}}, "cats"),
-    "cat_talents": (lambda q, x: {"forms": {"talents": "max", "target": "picked", "ids": x}}, "cats"),
-    "battle_9999": (lambda q, x: {"max_battle_items": True}, "fixed"),
-    "battle_endless": (lambda q, x: {"endless_all": True}, "fixed"),
-    "leadership": (lambda q, x: {"add": {"leadership": 100 * q}}, "number"),
-    "gamatoto_max": (lambda q, x: {"gamatoto": {"level": "max"}}, "fixed"),
-    "gamatoto_helpers": (lambda q, x: {"helpers_top": q}, "number"),
-    "gold_pass": (lambda q, x: {"progress": {"gold_pass": "give"}}, "fixed"),
+                                  "rank_caps": True}, "cats", False),
+    "cat_evolve": (lambda q, x: {"forms": {**EVOLVE, "target": "picked", "ids": x}}, "cats", False),
+    # ---- 스테이지 (장마다 클리어 + 보물)
+    "story_world_ch": (_story("world"), "era:world", False),
+    "story_future_ch": (_story("future"), "era:future", False),
+    "story_cosmos_ch": (_story("cosmos"), "era:cosmos", False),
+    # ---- 티켓
+    "normal_tickets_add": (lambda q, x: {"add": {"normal_tickets": 3000 * q}}, "number", True),
+    "rare_tickets_add": (lambda q, x: {"add": {"rare_tickets": 300 * q}}, "number", True),
+    "platinum_9": (lambda q, x: {"add": {"platinum_tickets": 9}}, "fixed", True),
+    "platinum_100": (lambda q, x: {"add": {"platinum_tickets": 100}}, "fixed", True),
+    "legend_4": (lambda q, x: {"add": {"legend_tickets": 4}}, "fixed", True),
+    "legend_50": (lambda q, x: {"add": {"legend_tickets": 50}}, "fixed", True),
+
+    # Older items: no longer in the catalog, kept so orders already queued still run.
+    "rare_tickets_299": (lambda q, x: {"rare_tickets": 299}, "fixed", False),
+    "normal_tickets_2999": (lambda q, x: {"normal_tickets": 2999}, "fixed", False),
+    "platinum_tickets": (lambda q, x: {"add": {"platinum_tickets": q}}, "number", False),
+    "legend_tickets": (lambda q, x: {"add": {"legend_tickets": q}}, "number", False),
+    "np_9999": (lambda q, x: {"np": 9999}, "fixed", False),
+    "fruit": (lambda q, x: {"fruit_add": 200 * q}, "number", False),
+    "stones": (lambda q, x: {"stone_add": 200 * q}, "number", False),
+    "xp": (lambda q, x: {"add": {"xp": 100_000_000 * q}}, "number", False),
+    "catseyes_9999": (lambda q, x: {"catseyes_set": 9999}, "fixed", False),
+    "story_world": (lambda q, x: {"clear_story": True, "story_chapters": STORY["world"]}, "fixed", False),
+    "story_future": (lambda q, x: {"clear_story": True, "story_chapters": STORY["future"]}, "fixed", False),
+    "story_cosmos": (lambda q, x: {"clear_story": True, "story_chapters": STORY["cosmos"]}, "fixed", False),
+    "treasure": (lambda q, x: {"story_chapters": x, "treasure_level": 3}, "chapters", False),
+    "all_cats_talents": (lambda q, x: {"forms": {"talents": "max", "target": "all", "ids": []}}, "fixed", False),
+    "cat_talents": (lambda q, x: {"forms": {"talents": "max", "target": "picked", "ids": x}}, "cats", False),
+    "battle_9999": (lambda q, x: {"max_battle_items": True}, "fixed", False),
+    "battle_endless": (lambda q, x: {"endless_all": True}, "fixed", False),
+    "leadership": (lambda q, x: {"add": {"leadership": 100 * q}}, "number", False),
+    "gamatoto_max": (lambda q, x: {"gamatoto": {"level": "max"}}, "fixed", False),
+    "gamatoto_helpers": (lambda q, x: {"helpers_top": q}, "number", False),
+    "gold_pass": (lambda q, x: {"progress": {"gold_pass": "give"}}, "fixed", False),
 }
 
 
 def quantity_mode(auto: str | None) -> str | None:
     return AUTO[auto][1] if auto in AUTO else None
+
+
+def picks_names(mode: str | None) -> bool:
+    """Whether the buyer types what they want (names / chapters) and the count comes from that."""
+    return mode is not None and (mode in ("cats", "chapters") or mode.startswith("era:"))
+
+
+def is_unlimited(auto: str | None) -> bool:
+    return bool(auto in AUTO and AUTO[auto][2])
 
 
 def build_edits(auto: str, quantity: int, picks: list[int]) -> dict[str, Any]:
@@ -152,6 +203,23 @@ def parse_chapters(text: str) -> tuple[list[int], str | None]:
     if not found:
         return [], "보물작할 장을 '세계편 1장, 미래편 2장'처럼 입력해 주세요."
     return found, None
+
+
+def parse_era_chapters(era: str, text: str) -> tuple[list[int], str | None]:
+    """For one era: '1장, 3장' / '1,2,3' / '전부' -> ([0, 2], None) (chapter 1 = 0)."""
+    if re.search(r"전부|전체|모두|올", text):
+        return [0, 1, 2], None
+    found: list[int] = []
+    for chapter in re.findall(r"[123]", re.sub(r"[456789]\d*|\d{2,}", " ", text)):
+        if int(chapter) - 1 not in found:
+            found.append(int(chapter) - 1)
+    if not found:
+        return [], "클리어할 장을 '1장, 2장' 또는 '1,2,3'처럼 입력해 주세요 (1~3장)."
+    return sorted(found), None
+
+
+def era_chapter_names(era: str, picks: list[int]) -> str:
+    return ", ".join(f"{ERA_NAMES[era]} {i + 1}장" for i in picks)
 
 
 def chapter_names(indexes: list[int]) -> str:
