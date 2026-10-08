@@ -508,6 +508,10 @@ async def purchase(interaction: discord.Interaction, product_id: int, quantity: 
             e.set_footer(text="DM을 보낼 수 없어서 여기에만 표시했어요. 꼭 따로 저장해 주세요!")
     elif product.kind == "role":
         e.add_field(name="지급된 역할", value=f"<@&{product.role_id}>", inline=False)
+    elif product.membership:
+        await sync_memberships(guild, interaction.user.id)
+        e.add_field(name="🐶 멤버십", value=(membership_text(guild.id, interaction.user.id) or "-")
+                    + "\n멤버십 역할이 지급됐어요. 혜택은 관리자가 확인 후 지급해 드려요.", inline=False)
     elif job:
         e.add_field(
             name="🤖 자동 처리 중",
@@ -542,6 +546,68 @@ async def purchase(interaction: discord.Interaction, product_id: int, quantity: 
         db.set_order_log(result.order_id, msg.channel.id, msg.id)
     if job:
         asyncio.create_task(fulfil_order(result.order_id))
+
+
+# ----------------------------------------------------------- memberships ----
+_role_warned: set[int] = set()
+
+
+async def member_role(guild: discord.Guild, tier: str) -> discord.Role | None:
+    """The role for a membership tier, made if the server doesn't have one by that name."""
+    name, colour = catalog.MEMBER_ROLES.get(tier, (tier, 0))
+    role = discord.utils.get(guild.roles, name=name)
+    if role is None:
+        try:
+            role = await guild.create_role(name=name, colour=discord.Colour(colour), hoist=True,
+                                           reason="멤버십 역할 (상점 봇)")
+        except discord.HTTPException:
+            return None
+    return role
+
+
+async def sync_memberships(guild: discord.Guild, user_id: int | None = None) -> None:
+    """Give every active membership its role and take back the ones that ended or were refunded."""
+    now = int(time.time())
+    problems: list[str] = []
+    for (uid, tier), ends in db.memberships(guild.id, user_id).items():
+        active = ends is None or ends > now
+        role = await member_role(guild, tier)
+        if role is None:
+            problems.append(f"'{tier}' 역할을 만들 수 없어요")
+            continue
+        try:
+            member = guild.get_member(uid) or await guild.fetch_member(uid)
+        except discord.HTTPException:
+            continue  # left the server
+        has = role in member.roles
+        try:
+            if active and not has:
+                await member.add_roles(role, reason=f"{tier} 멤버십")
+            elif not active and has:
+                await member.remove_roles(role, reason=f"{tier} 멤버십 기간 끝남")
+                await dm(uid, embed("🐶 멤버십 종료", f"**{guild.name}**의 **{tier}** 멤버십이 끝나서 역할을 회수했어요.\n"
+                                    "다시 이용하려면 상점에서 멤버십을 구매해 주세요.", COLOR_INFO))
+        except discord.HTTPException:
+            problems.append(f"{role.mention} 역할을 지급/회수할 수 없어요")
+    if problems and guild.id not in _role_warned:
+        _role_warned.add(guild.id)  # once per restart
+        await send_log(guild, embed(
+            "⚠️ 멤버십 역할 오류",
+            "\n".join(dict.fromkeys(problems)) + "\n\n봇에 **역할 관리** 권한이 있고, 서버 설정 → 역할에서 "
+            "봇 역할이 VIP·VVIP·MASTER 역할보다 **위에** 있는지 확인하세요.", COLOR_ERR))
+    elif not problems:
+        _role_warned.discard(guild.id)
+
+
+def membership_text(guild_id: int, user_id: int) -> str:
+    now = int(time.time())
+    lines = []
+    for (_, tier), ends in db.memberships(guild_id, user_id).items():
+        if ends is None:
+            lines.append(f"**{tier}** — 영구")
+        elif ends > now:
+            lines.append(f"**{tier}** — <t:{ends}:f>까지 (<t:{ends}:R>)")
+    return "\n".join(lines)
 
 
 # ------------------------------------------------------- automatic edits ----
@@ -927,6 +993,8 @@ class OrderButton(
                             f"{order['price']:,}원을 돌려드렸어요.")
         except ShopError as exc:
             return await error(interaction, str(exc))
+        if self.action == "refund":
+            asyncio.create_task(sync_memberships(interaction.guild, order["user_id"]))
         e = interaction.message.embeds[0] if interaction.message.embeds else embed(text)
         e.title, e.color = text, color
         e.description = f"{interaction.user.mention}님이 처리했어요."
@@ -1164,6 +1232,7 @@ class ShopBot(discord.Client):
         if not WEBHOOK_SECRET:
             log.warning("WEBHOOK_SECRET이 비어 있어서 입금 웹훅이 꺼져 있어요.")
         expire_charges.start()
+        membership_roles.start()
 
     async def close(self) -> None:
         if self.runner is not None:
@@ -1207,6 +1276,17 @@ async def expire_charges() -> None:
     fulfil.prune_backups()
     if client.is_ready():
         asyncio.create_task(refresh_cat_names())
+
+
+@tasks.loop(minutes=30)
+async def membership_roles() -> None:
+    """Gives roles for memberships (past purchases too) and takes them back when they end."""
+    await client.wait_until_ready()
+    for guild in client.guilds:
+        try:
+            await sync_memberships(guild)
+        except Exception:  # noqa: BLE001 - keep the loop alive
+            log.exception("멤버십 역할 동기화 오류 (%s)", guild.id)
 
 
 @tree.error
@@ -1285,6 +1365,15 @@ async def cmd_shop(interaction: discord.Interaction):
 @app_commands.guild_only()
 async def cmd_history(interaction: discord.Interaction):
     await show_history(interaction)
+
+
+@tree.command(name="멤버십", description="내 멤버십과 남은 기간을 확인해요")
+async def cmd_membership(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await sync_memberships(interaction.guild, interaction.user.id)
+    text = membership_text(interaction.guild_id, interaction.user.id)
+    await reply(interaction, embed(
+        "🐶 내 멤버십", text or "이용 중인 멤버십이 없어요. `/상점`의 🐶 멤버십에서 구매할 수 있어요."))
 
 
 @tree.command(name="랭킹", description="잔액 순위를 확인해요")
@@ -1529,9 +1618,11 @@ async def prod_catalog(interaction: discord.Interaction):
         "✅ 기본 가격표 적용",
         f"새로 등록 {added}개 · 가격/설정 갱신 {updated}개 · 판매 중지 {removed}개"
         + "\n`/상품 목록`으로 확인하고, `/상품 수정`으로 가격·수량을 바꿀 수 있어요."
-        + "\n⚠️ 표시가 있는 상품은 게임 최대치를 넘겨서 밴 위험이 있다고 구매자에게 안내돼요.",
+        + "\n⚠️ 표시가 있는 상품은 게임 최대치를 넘겨서 밴 위험이 있다고 구매자에게 안내돼요."
+        + "\n🐶 멤버십을 산 사람들에게 VIP·VVIP·MASTER 역할을 지급하고 있어요.",
         COLOR_OK,
     ))
+    asyncio.create_task(sync_memberships(interaction.guild))
 
 
 class StockModal(discord.ui.Modal, title="재고 추가"):
@@ -1583,6 +1674,7 @@ async def order_refund(interaction: discord.Interaction, 주문번호: int):
     except ShopError as exc:
         return await error(interaction, str(exc))
     await reply(interaction, embed("✅ 환불 완료", f"주문 #{주문번호}: <@{order['user_id']}>에게 {order['price']:,}원 반환", COLOR_OK))
+    asyncio.create_task(sync_memberships(interaction.guild, order["user_id"]))
     await dm(order["user_id"], embed(
         "↩️ 주문 환불", f"주문 #{주문번호} **{order['product_name']}**이(가) 환불되어 {order['price']:,}원을 돌려드렸어요.",
         COLOR_ERR))

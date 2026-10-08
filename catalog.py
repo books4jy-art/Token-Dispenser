@@ -85,13 +85,18 @@ CATALOG = [
     _item(PLAT, "플래티넘 티켓 100장", 3000, auto="platinum_100", risk="high"),
     _item(LEGEND, "레전드 티켓 4장", 500, auto="legend_4", risk="some"),
     _item(LEGEND, "레전드 티켓 50장", 3000, auto="legend_50", risk="high"),
-    # 🐶 멤버십: an admin gives the perks by hand (no order form).
+    # 🐶 멤버십: the bot gives the role named after the tier (MEMBER_ROLES); an admin gives the
+    # perks by hand. Monthly ones last 30 days (db.MEMBERSHIP_DAYS) and the role is then taken back.
     *[
-        _item(MEMBER, f"{tier} ({period})", price, form=None, description=PERKS[tier])
+        _item(MEMBER, f"{tier} ({period})", price, form=None, description=PERKS[tier],
+              membership=f"{tier}:{tag}")
         for tier, monthly, forever in (("VIP", 10000, 30000), ("VVIP", 20000, 45000), ("MASTER", 30000, 60000))
-        for period, price in (("매달", monthly), ("영구", forever))
+        for period, tag, price in (("매달", "month", monthly), ("영구", "forever", forever))
     ],
 ]
+
+# Membership tier -> (role name, role colour). The role is made if the server doesn't have one by that name.
+MEMBER_ROLES = {"VIP": ("VIP", 0xF1C40F), "VVIP": ("VVIP", 0xE67E22), "MASTER": ("MASTER", 0x9B59B6)}
 
 # Shown on items with a risk (shop list, purchase confirmation).
 RISK_LABEL = {"high": "⚠️ 밴 위험 높음", "some": "⚠️ 밴 위험 있음"}

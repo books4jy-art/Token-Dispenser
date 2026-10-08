@@ -99,6 +99,8 @@ CREATE TABLE IF NOT EXISTS ledger (
 """
 
 
+MEMBERSHIP_DAYS = 30  # how long one monthly membership lasts
+
 # Columns added after the first release. CREATE TABLE IF NOT EXISTS won't add them to a
 # database that already exists, so they are added here one by one if missing.
 MIGRATIONS = {
@@ -113,6 +115,7 @@ MIGRATIONS = {
         "auto": "TEXT",                               # fulfil.AUTO key: the bot edits the save itself
         "risk": "TEXT NOT NULL DEFAULT ''",          # '' | some | high: ban-risk warning (catalog.RISK_TEXT)
         "position": "INTEGER",                        # order in the shop (catalog items); NULL = by id
+        "membership": "TEXT NOT NULL DEFAULT ''",    # '' | '<tier>:month' | '<tier>:forever' (role given)
     },
     "orders": {
         "quantity": "INTEGER NOT NULL DEFAULT 1",
@@ -148,6 +151,7 @@ class Product:
     form: str | None = None
     auto: str | None = None
     risk: str = ""
+    membership: str = ""
 
     def on_sale(self, hour: int) -> bool:
         """Whether the item can be bought at this KST hour (0–23)."""
@@ -281,6 +285,7 @@ class Database:
             active=bool(row["active"]), stock=row["stock_count"], category=row["category"],
             unit=row["unit"], max_qty=row["max_qty"], sale_start=row["sale_start"],
             sale_end=row["sale_end"], form=row["form"], auto=row["auto"], risk=row["risk"] or "",
+            membership=row["membership"] or "",
         )
 
     def get_product(self, guild_id: int, product_id: int) -> Product | None:
@@ -333,12 +338,12 @@ class Database:
                 values = (item["price"], item.get("description", ""), item.get("category", "기타"),
                           item.get("auto"), item.get("unit", ""), max(1, item.get("max_qty", 1)),
                           item.get("form"), item.get("sale_start"), item.get("sale_end"),
-                          item.get("risk", ""), position)
+                          item.get("risk", ""), item.get("membership", ""), position)
                 if item["name"] in existing:
                     pid = existing[item["name"]]
                     c.execute(
                         "UPDATE products SET price=?, description=?, category=?, auto=?, unit=?, max_qty=?, "
-                        "form=?, sale_start=?, sale_end=?, risk=?, position=? WHERE id=?",
+                        "form=?, sale_start=?, sale_end=?, risk=?, membership=?, position=? WHERE id=?",
                         (*values, pid),
                     )
                     updated += 1
@@ -349,8 +354,8 @@ class Database:
                         item.get("unit", ""), item.get("max_qty", 1), item.get("sale_start"),
                         item.get("sale_end"), item.get("form"), item.get("auto"),
                     )
-                    c.execute("UPDATE products SET risk=?, position=? WHERE id=?",
-                              (item.get("risk", ""), position, pid))
+                    c.execute("UPDATE products SET risk=?, membership=?, position=? WHERE id=?",
+                              (item.get("risk", ""), item.get("membership", ""), position, pid))
                     added += 1
                 keep.add(pid)
             gone = [pid for pid in existing.values() if pid not in keep]
@@ -462,6 +467,30 @@ class Database:
             # The buyer's game codes aren't needed once the order is done.
             c.execute("UPDATE orders SET status='done', request='', job='' WHERE id=?", (order_id,))
             return order
+
+    def memberships(self, guild_id: int, user_id: int | None = None) -> dict[tuple[int, str], int | None]:
+        """Every (user, tier) that ever bought a membership -> when it ends (None = permanent).
+
+        Built from the orders, so past purchases count too; refunded ones don't add any time. A monthly
+        purchase lasts MEMBERSHIP_DAYS per unit; buying again before it ends adds on to it."""
+        sql = ("SELECT o.user_id, o.created_at, o.quantity, o.status, p.membership FROM orders o "
+               "JOIN products p ON p.id=o.product_id WHERE o.guild_id=? AND p.membership!=''")
+        args: list[object] = [guild_id]
+        if user_id is not None:
+            sql += " AND o.user_id=?"
+            args.append(user_id)
+        ends: dict[tuple[int, str], int | None] = {}
+        for row in self._conn.execute(sql + " ORDER BY o.created_at, o.id", args):
+            tier, _, period = row["membership"].partition(":")
+            key = (row["user_id"], tier)
+            if row["status"] == "refunded":
+                ends.setdefault(key, 0)  # ended (unless another purchase keeps it going)
+            elif period == "forever":
+                ends[key] = None
+            elif key not in ends or ends[key] is not None:
+                start = max(ends.get(key) or 0, row["created_at"])
+                ends[key] = start + MEMBERSHIP_DAYS * 86400 * max(1, row["quantity"])
+        return ends
 
     def get_order(self, order_id: int) -> sqlite3.Row | None:
         return self._conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
