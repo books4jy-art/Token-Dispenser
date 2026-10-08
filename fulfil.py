@@ -55,7 +55,7 @@ AUTO: dict[str, tuple[Builder, str, bool]] = {
     "np_add": (lambda q, x: {"add": {"np": 1000 * q}}, "number", True),
     "catseyes_add": (lambda q, x: {"catseyes_add": 998 * q}, "number", True),
     "fruitseed_add": (lambda q, x: {"fruitseed_add": 998 * q}, "number", True),
-    "stonegem_add": (lambda q, x: {"stonegem_add": 1000 * q}, "number", True),
+    "stonegem_add": (lambda q, x: {"stonegem_add": 998 * q}, "number", True),
     "leadership_add": (lambda q, x: {"add": {"leadership": 999 * q}}, "number", True),
     "orbs_998": (lambda q, x: {"orbs": {"all": True, "count": 998}}, "fixed", False),
     "battle_add": (lambda q, x: {"battle_add": 998 * q}, "number", True),
