@@ -609,13 +609,19 @@ def _more_stages(core: Any, save: Any, spec: dict[str, Any]) -> list[Any]:
     def outbreaks() -> str:
         # A save only lists the zombie stages the game has shown so far (a new account just a few), so add
         # every chapter and stage of the game's full layout first, then clear them all.
+        # spec["outbreaks"] is True (every chapter) or a list of chapter ids (shop bot: one era).
         from bcsfe.core.game.map.outbreaks import Chapter as OutbreakChapter, Outbreak
+        only = spec["outbreaks"] if isinstance(spec["outbreaks"], list) else None
         for chapter_id, stage_ids in _outbreak_layout().items():
+            if only is not None and chapter_id not in only:
+                continue
             chapter = save.outbreaks.chapters.setdefault(chapter_id, OutbreakChapter(chapter_id, {}))
             for stage_id in stage_ids:
                 chapter.outbreaks.setdefault(stage_id, Outbreak(False))
         count = 0
         for chapter in list(save.outbreaks.chapters.values()):
+            if only is not None and chapter.id not in only:
+                continue
             for stage_id in list(chapter.outbreaks.keys()):
                 save.outbreaks.clear_outbreak(chapter.get_true_id(), stage_id, True)
                 count += 1

@@ -380,6 +380,9 @@ class OrderModal(discord.ui.Modal):
                 if self.mode == "cats":
                     picks, problem = cat_names.resolve(detail)
                     shown = ", ".join(f"{cat_names.name(i)} (#{i})" for i in picks)
+                elif self.mode == "hours":
+                    picks, problem = fulfil.parse_hours(detail)
+                    shown = f"{picks[0]:,}시간" if picks else ""
                 elif self.mode.startswith("era:"):
                     era = self.mode.split(":", 1)[1]
                     picks, problem = fulfil.parse_era_chapters(era, detail)

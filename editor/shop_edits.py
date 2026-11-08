@@ -13,6 +13,8 @@ save is downloaded:
   "catseyes_set": 9999  -> every catseye type set to this; "catseyes_add" adds
   "battle_add":   998   -> + to every battle item
   "drink_add":    999   -> + to every Catamin (drink)
+  "material_add": 1000  -> + to every castle material (base materials)
+  "engineers_add": 5    -> + Ototo engineers (the editor caps it at the game's maximum)
   "endless_all":  True  -> every battle item endless
   "helpers_top":  3     -> Gamatoto helpers: 3 of the highest rarity
 """
@@ -74,6 +76,16 @@ def expand(core: Any, save: Any, edits: dict[str, Any]) -> dict[str, Any]:
     drink_add = edits.pop("drink_add", None)
     if drink_add:
         edits["items_drink"] = {i: int(v) + int(drink_add) for i, v in enumerate(save.catamins)}
+
+    material_add = edits.pop("material_add", None)
+    if material_add:
+        edits["items_material"] = {i: int(m.amount) + int(material_add)
+                                   for i, m in enumerate(save.ototo.base_materials.materials)}
+    engineers_add = edits.pop("engineers_add", None)
+    if engineers_add:
+        ototo = dict(edits.get("ototo") or {})
+        ototo["engineers"] = int(save.ototo.engineers) + int(engineers_add)
+        edits["ototo"] = ototo
 
     if edits.pop("endless_all", None):
         edits["endless"] = {"minutes": "inf", "ids": list(range(len(save.battle_items.items)))}

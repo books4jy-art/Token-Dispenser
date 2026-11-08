@@ -41,13 +41,55 @@ def _story(era: str) -> Builder:
 
 
 EVOLVE = {"true": "evolve", "fourth": "evolve"}  # 3rd and 4th forms, where the character has them
+OUTBREAKS = {"world": [0, 1, 2], "future": [4, 5, 6], "cosmos": [7, 8, 9]}  # zombie chapter ids per era
+
+
+def _maps(*groups: str) -> Builder:
+    """Legend maps (worker.MAP_GROUPS keys) cleared with every crown (4성)."""
+    return lambda q, x: {"clear_maps": list(groups), "map_crowns": 0}
+
+
+def _zombies(*eras: str) -> Builder:
+    return lambda q, x: {"more_stages": {"outbreaks": [c for era in eras for c in OUTBREAKS[era]]}}
 
 # auto key -> (edits builder, how the quantity is chosen, unlimited)
-#   how: "number" | "cats" | "chapters" (보물작, any era) | "era:<world|future|cosmos>" | "fixed"
+#   how: "number" | "cats" | "chapters" (보물작, any era) | "era:<world|future|cosmos>"
+#        | "hours" (the buyer types a number of hours) | "fixed"
 #   unlimited: the editor runs with the Unlimited editor's limits (storage maxima, not the game's).
 AUTO: dict[str, tuple[Builder, str, bool]] = {
     # ---- 재화
     "catfood_45000": (lambda q, x: {"atleast": {"catfood": 45_000}}, "fixed", False),
+    "catfood_200k": (lambda q, x: {"atleast": {"catfood": 200_000}}, "fixed", True),
+    "catfood_500k": (lambda q, x: {"atleast": {"catfood": 500_000}}, "fixed", True),
+    "catseyes_999": (lambda q, x: {"catseyes_add": 999 * q}, "number", False),
+    "fruitseed_999": (lambda q, x: {"fruitseed_add": 999 * q}, "number", True),
+    "orbs_999": (lambda q, x: {"orbs": {"all": True, "count": 999}}, "fixed", True),
+    "battle_999": (lambda q, x: {"battle_add": 999 * q}, "number", False),
+    "drink_999": (lambda q, x: {"drink_add": 999 * q}, "number", False),
+    # ---- 스테이지
+    "story_all": (lambda q, x: {"clear_story": True, "story_chapters": [*STORY["world"], *STORY["future"],
+                                                                         *STORY["cosmos"]]}, "fixed", False),
+    "legend_all": (_maps("legend"), "fixed", False),
+    "uncanny_all": (_maps("uncanny"), "fixed", False),
+    "zero_all": (_maps("zero"), "fixed", False),
+    "zombie_world": (_zombies("world"), "fixed", False),
+    "zombie_future": (_zombies("future"), "fixed", False),
+    "zombie_cosmos": (_zombies("cosmos"), "fixed", False),
+    "zombie_all": (_zombies("world", "future", "cosmos"), "fixed", False),
+    # ---- 캐릭터 (진화 = 3단, 4진 = 3단 + 4단)
+    "cat_true": (lambda q, x: {"forms": {"true": "evolve", "target": "picked", "ids": x}}, "cats", False),
+    "cat_fourth": (lambda q, x: {"forms": {**EVOLVE, "target": "picked", "ids": x}}, "cats", False),
+    "all_cats_true": (lambda q, x: {"forms": {"true": "evolve", "target": "all", "ids": []}}, "fixed", False),
+    "all_cats_fourth": (lambda q, x: {"forms": {**EVOLVE, "target": "all", "ids": []}}, "fixed", False),
+    # ---- 가마토토 · 오토토
+    "engineers_5": (lambda q, x: {"engineers_add": 5}, "fixed", False),
+    "material_1000": (lambda q, x: {"material_add": 1000 * q}, "number", False),
+    "helpers_10": (lambda q, x: {"helpers_top": 10}, "fixed", False),
+    "cannons_max": (lambda q, x: {"ototo": {"max_cannons": True}}, "fixed", False),
+    "shrine_max": (lambda q, x: {"gamatoto": {"shrine": "max"}}, "fixed", False),
+    # ---- 기타
+    "playtime": (lambda q, x: {"progress": {"playtime_hours": x[0]}}, "hours", False),
+    "medals_all": (lambda q, x: {"progress": {"medals": "add"}}, "fixed", False),
     "catfood_100k": (lambda q, x: {"atleast": {"catfood": 100_000}}, "fixed", True),
     "catfood_1m": (lambda q, x: {"atleast": {"catfood": 1_000_000}}, "fixed", True),
     "catfood_2100m": (lambda q, x: {"atleast": {"catfood": 2_100_000_000}}, "fixed", True),
@@ -115,7 +157,7 @@ def quantity_mode(auto: str | None) -> str | None:
 
 def picks_names(mode: str | None) -> bool:
     """Whether the buyer types what they want (names / chapters) and the count comes from that."""
-    return mode is not None and (mode in ("cats", "chapters") or mode.startswith("era:"))
+    return mode is not None and (mode in ("cats", "chapters", "hours") or mode.startswith("era:"))
 
 
 def is_unlimited(auto: str | None) -> bool:
@@ -217,6 +259,15 @@ def parse_era_chapters(era: str, text: str) -> tuple[list[int], str | None]:
     if not found:
         return [], "클리어할 장을 '1장, 2장' 또는 '1,2,3'처럼 입력해 주세요 (1~3장)."
     return sorted(found), None
+
+
+def parse_hours(text: str) -> tuple[list[int], str | None]:
+    """'1000시간' / '1,000' -> ([1000], None)."""
+    digits = re.sub(r"[,\s]", "", text)
+    found = re.search(r"\d+", digits)
+    if not found or not 0 <= int(found.group()) <= 999_999:
+        return [], "플레이 시간을 0~999,999 사이의 숫자(시간)로 입력해 주세요. 예: 1000"
+    return [int(found.group())], None
 
 
 def era_chapter_names(era: str, picks: list[int]) -> str:
