@@ -90,7 +90,12 @@ def points_for(guild_id: int, won: int) -> int:
 def is_admin(member: discord.abc.User) -> bool:
     if not isinstance(member, discord.Member):
         return False
-    if member.guild_permissions.manage_guild:
+    if member.guild_permissions.manage_guild or member.guild.owner_id == member.id:
+        return True
+    # The permissions Discord sent with the command: right even when the bot's copy of the
+    # server's roles is out of date (e.g. a role changed a moment ago).
+    sent = member.resolved_permissions
+    if sent is not None and (sent.manage_guild or sent.administrator):
         return True
     role_id = setting_int(member.guild.id, "admin_role", 0)
     return any(r.id == role_id for r in member.roles)
