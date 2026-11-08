@@ -1249,6 +1249,21 @@ class ShopBot(discord.Client):
             self._started = True
             await resume_jobs()
             asyncio.create_task(refresh_cat_names())
+            if not DEV_GUILD_ID:
+                asyncio.create_task(clear_guild_commands())
+
+
+async def clear_guild_commands() -> None:
+    """Commands are global now: remove the per-server copies left from when DEV_GUILD_ID was set
+    (otherwise that server shows every command twice)."""
+    for guild in client.guilds:
+        try:
+            if await client.tree.fetch_commands(guild=guild):
+                client.tree.clear_commands(guild=guild)
+                await client.tree.sync(guild=guild)
+                log.info("서버별 명령어 정리: %s", guild.name)
+        except discord.HTTPException:
+            pass
 
 
 _names_tried = 0.0
