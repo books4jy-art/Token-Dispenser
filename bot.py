@@ -1320,8 +1320,17 @@ async def on_app_command_error(interaction: discord.Interaction, exc: app_comman
         return await error(interaction, "이 명령어를 사용할 권한이 없어요.")
     if isinstance(exc, app_commands.NoPrivateMessage):
         return await error(interaction, "서버에서만 사용할 수 있어요.")
+    if isinstance(exc, app_commands.CommandInvokeError) and isinstance(exc.original, discord.Forbidden):
+        # The bot itself lacks a permission (usually it can't see or post in this channel).
+        return await error(interaction, BOT_NO_ACCESS)
     log.exception("명령어 오류", exc_info=exc)
     await error(interaction, "처리 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요.")
+
+
+BOT_NO_ACCESS = (
+    "봇이 이 채널에 접근할 권한이 없어요.\n채널 설정(⚙️) → **권한** → **역할/멤버 추가**에서 봇을 추가하고 "
+    "**채널 보기 · 메시지 보내기 · 링크 첨부 · 메시지 기록 보기**를 허용해 주세요."
+)
 
 
 def admin_only():
