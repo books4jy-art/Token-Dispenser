@@ -206,8 +206,15 @@ def kst_hour() -> int:
     return datetime.datetime.now(KST).hour
 
 
+def is_quote(p) -> bool:
+    """주문제작: a 0원 admin item; the admin quotes the price later (/주문 견적)."""
+    return p.kind == "manual" and p.price == 0
+
+
 def price_label(p, price: int | None = None) -> str:
     """'3,000원' or '200원 / 200개'."""
+    if is_quote(p):
+        return "견적 문의"
     unit = f" / {p.unit}" if p.unit else ""
     return f"{p.price:,}원{unit}"
 
@@ -240,8 +247,9 @@ async def open_shop(interaction: discord.Interaction) -> None:
     e = embed("🛒 상점", f"보유 잔액: **{balance:,}원**\n아래 메뉴에서 분류를 골라 주세요.")
     for cat in cats[:25]:
         items = [p for p in products if p.category == cat]
-        cheapest = min(p.price for p in items)
-        e.add_field(name=f"📂 {cat}", value=f"상품 {len(items)}개 · {cheapest:,}원부터", inline=True)
+        prices = [p.price for p in items if not is_quote(p)]
+        cheapest = f" · {min(prices):,}원부터" if prices else ""
+        e.add_field(name=f"📂 {cat}", value=f"상품 {len(items)}개{cheapest}", inline=True)
     await reply(interaction, e, CategoryView(cats))
 
 
@@ -419,6 +427,13 @@ async def confirm_purchase(interaction: discord.Interaction, product, quantity: 
     unit_price = db.price_for(interaction.guild_id, interaction.user.id, product)
     price = unit_price * quantity
     what = f"**{product.name}**" + (f" × {quantity} ({product.unit} 단위)" if product.unit else "")
+    if is_quote(product):
+        e = embed("🏆 주문제작 요청", "이 내용으로 견적을 요청할까요? 지금은 돈이 빠져나가지 않아요.\n"
+                  "관리자가 견적을 보내면 **DM의 결제하기 버튼**으로 결제하고, 결제가 끝나면 작업해 드려요.", COLOR_WARN)
+        if request:
+            e.add_field(name="입력한 정보", value="코드와 요청 내용은 관리자에게만 전달돼요.", inline=False)
+        return await interaction.response.send_message(
+            embed=e, view=ConfirmBuyView(product.id, quantity, request, job), ephemeral=True)
     e = embed(
         "🛍️ 구매 확인",
         f"{what}을(를) **{price:,}원**에 구매할까요?"
@@ -520,6 +535,12 @@ async def purchase(interaction: discord.Interaction, product_id: int, quantity: 
         await sync_memberships(guild, interaction.user.id)
         e.add_field(name="🐶 멤버십", value=(membership_text(guild.id, interaction.user.id) or "-")
                     + "\n멤버십 역할이 지급됐어요. 혜택은 관리자가 확인 후 지급해 드려요.", inline=False)
+    elif is_quote(product):
+        e.title = "🏆 견적 요청 완료"
+        e.description = f"**{product.name}** 요청을 보냈어요. 관리자가 견적을 보내 드릴 거예요."
+        e.clear_fields()
+        e.add_field(name="주문 번호", value=f"#{result.order_id}")
+        e.add_field(name="안내", value="견적은 **DM**으로 와요. 서버 멤버의 DM을 허용해 주세요.", inline=False)
     elif job:
         e.add_field(
             name="🤖 자동 처리 중",
@@ -545,6 +566,10 @@ async def purchase(interaction: discord.Interaction, product_id: int, quantity: 
     view = None
     if product.kind == "manual":
         log_e.title = "🤖 자동 처리 중인 주문" if job else "🛎️ 처리가 필요한 주문"
+        if is_quote(product):
+            log_e.title = "🏆 견적이 필요한 주문제작"
+            log_e.description = (f"`/주문 견적 주문번호:{result.order_id} 금액:` 으로 견적을 보내 주세요.\n"
+                                 "구매자가 결제한 뒤에 작업하고 `처리 완료`를 눌러 주세요.")
         log_e.color = COLOR_INFO if job else COLOR_WARN
         view = discord.ui.View(timeout=None)
         view.add_item(OrderButton("done", result.order_id))
@@ -965,6 +990,45 @@ async def resolve_charge_action(interaction: discord.Interaction, charge_id: int
         ))
 
 
+class QuoteButton(
+    discord.ui.DynamicItem[discord.ui.Button], template=r"quote:(?P<guild>\d+):(?P<id>\d+):(?P<amount>\d+)"
+):
+    """결제하기 on a 주문제작 quote sent to the buyer by DM (it also works after restarts)."""
+
+    def __init__(self, guild_id: int, order_id: int, amount: int) -> None:
+        self.guild_id, self.order_id, self.amount = guild_id, order_id, amount
+        super().__init__(discord.ui.Button(
+            label=f"{amount:,}원 결제하기", emoji="💳", style=discord.ButtonStyle.success,
+            custom_id=f"quote:{guild_id}:{order_id}:{amount}"))
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(int(match["guild"]), int(match["id"]), int(match["amount"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await pay_quote(interaction, self.guild_id, self.order_id, self.amount)
+
+
+async def pay_quote(interaction: discord.Interaction, guild_id: int, order_id: int, amount: int) -> None:
+    try:
+        order, balance = db.pay_quote(guild_id, order_id, interaction.user.id, amount)
+    except ShopError as exc:
+        e = embed("❌ 결제하지 못했어요", str(exc), COLOR_ERR)
+        if "잔액" in str(exc):
+            e.description += "\n서버에서 `/충전`으로 충전한 뒤 다시 눌러 주세요."
+        return await interaction.response.send_message(embed=e, ephemeral=interaction.guild is not None)
+    done = embed("✅ 결제 완료", f"주문 #{order_id} **{order['product_name']}** — **{amount:,}원** 결제했어요.\n"
+                 f"남은 잔액: {balance:,}원\n관리자가 작업을 끝내면 알려 드릴게요.", COLOR_OK)
+    if interaction.message is not None and interaction.guild is None:
+        await interaction.response.edit_message(embed=done, view=None)
+    else:
+        await interaction.response.send_message(embed=done, ephemeral=True)
+    guild = client.get_guild(guild_id)
+    await send_log(guild, embed("💳 주문제작 결제 완료",
+                                f"<@{order['user_id']}>님이 주문 #{order_id} 견적 **{amount:,}원**을 결제했어요.\n"
+                                "작업한 뒤 주문의 `처리 완료`를 눌러 주세요.", COLOR_OK))
+
+
 class OrderButton(
     discord.ui.DynamicItem[discord.ui.Button], template=r"order:(?P<action>done|refund):(?P<id>\d+)"
 ):
@@ -1210,7 +1274,7 @@ class ShopBot(discord.Client):
 
     async def setup_hook(self) -> None:
         self.add_view(PanelView())
-        self.add_dynamic_items(ChargeButton, OrderButton, OldDailyButton, OldRedeemButton)
+        self.add_dynamic_items(ChargeButton, OrderButton, QuoteButton, OldDailyButton, OldRedeemButton)
         for group in (settings_group, points_group, product_group, stock_group,
                       order_group, deposit_group, vault_group):
             self.tree.add_command(group)
@@ -1710,6 +1774,48 @@ async def order_refund(interaction: discord.Interaction, 주문번호: int):
     await dm(order["user_id"], embed(
         "↩️ 주문 환불", f"주문 #{주문번호} **{order['product_name']}**이(가) 환불되어 {order['price']:,}원을 돌려드렸어요.",
         COLOR_ERR))
+
+
+@order_group.command(name="견적", description="주문제작 요청에 가격을 정해 구매자에게 결제 버튼을 보내요")
+@app_commands.describe(주문번호="로그 채널의 주문 번호", 금액="받을 금액 (원)")
+@money_only()
+async def order_quote(interaction: discord.Interaction, 주문번호: int, 금액: app_commands.Range[int, 1, 100_000_000]):
+    try:
+        order = db.set_quote(interaction.guild_id, 주문번호, 금액)
+    except ShopError as exc:
+        return await error(interaction, str(exc))
+    e = embed("🏆 주문제작 견적", f"**{interaction.guild.name}** 주문 #{주문번호} **{order['product_name']}**의 견적이에요.\n\n"
+              f"💰 **{금액:,}원**\n\n아래 버튼을 누르면 잔액에서 결제돼요. 잔액이 부족하면 먼저 `/충전` 해 주세요.\n"
+              f"버튼이 안 되면 서버에서 `/견적결제 주문번호:{주문번호}` 를 입력하세요.", COLOR_INFO)
+    if order["request"]:
+        detail = [line for line in order["request"].splitlines() if not line.startswith(("기종변경", "인증번호"))]
+        if detail:
+            e.add_field(name="요청 내용", value="\n".join(detail)[:1000], inline=False)
+    view = discord.ui.View(timeout=None)
+    view.add_item(QuoteButton(interaction.guild_id, 주문번호, 금액))
+    sent = True
+    try:
+        user = client.get_user(order["user_id"]) or await client.fetch_user(order["user_id"])
+        await user.send(embed=e, view=view)
+    except discord.HTTPException:
+        sent = False
+    await reply(interaction, embed(
+        "✅ 견적 보냄" if sent else "⚠️ 견적은 저장했지만 DM을 못 보냈어요",
+        f"주문 #{주문번호}: <@{order['user_id']}> · **{금액:,}원**\n"
+        + ("구매자가 결제하면 로그 채널에 알려 드려요." if sent else
+           f"구매자에게 서버에서 `/견적결제 주문번호:{주문번호}` 로 결제하라고 알려 주세요."),
+        COLOR_OK if sent else COLOR_WARN))
+
+
+@tree.command(name="견적결제", description="관리자가 보낸 주문제작 견적을 결제해요")
+@app_commands.guild_only()
+async def cmd_pay_quote(interaction: discord.Interaction, 주문번호: int):
+    order = db.get_order(주문번호)
+    if order is None or order["guild_id"] != interaction.guild_id or order["user_id"] != interaction.user.id:
+        return await error(interaction, "내 주문이 아니에요.")
+    if not order["quote"]:
+        return await error(interaction, "아직 견적이 오지 않은 주문이에요.")
+    await pay_quote(interaction, interaction.guild_id, 주문번호, order["quote"])
 
 
 @order_group.command(name="완료", description="관리자 처리 주문을 완료로 표시해요")

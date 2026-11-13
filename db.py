@@ -124,6 +124,7 @@ MIGRATIONS = {
         "job_state": "TEXT NOT NULL DEFAULT ''",      # '' | queued | running | done | failed | interrupted
         "log_channel_id": "INTEGER",
         "log_message_id": "INTEGER",
+        "quote": "INTEGER",                           # 주문제작: price an admin quoted (paid once price > 0)
     },
 }
 
@@ -457,6 +458,38 @@ class Database:
             c.execute("UPDATE orders SET status='refunded', request='', job='' WHERE id=?", (order_id,))
             return order
 
+    def set_quote(self, guild_id: int, order_id: int, amount: int) -> sqlite3.Row:
+        """주문제작: the price an admin quoted for a 0원 request. The buyer pays it with pay_quote."""
+        if amount <= 0:
+            raise ShopError("견적 금액은 1원 이상이어야 해요.")
+        with self._tx() as c:
+            order = c.execute("SELECT * FROM orders WHERE id=? AND guild_id=?", (order_id, guild_id)).fetchone()
+            if order is None or order["status"] != "pending":
+                raise ShopError("처리 대기 중인 주문이 아니에요.")
+            if order["price"]:
+                raise ShopError("이미 결제된 주문이에요.")
+            c.execute("UPDATE orders SET quote=? WHERE id=?", (amount, order_id))
+            return c.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+
+    def pay_quote(self, guild_id: int, order_id: int, user_id: int, amount: int) -> tuple[sqlite3.Row, int]:
+        """The buyer pays the quoted price. `amount` is what they were shown (a changed quote is refused).
+        Returns (order, new balance)."""
+        with self._tx() as c:
+            order = c.execute("SELECT * FROM orders WHERE id=? AND guild_id=?", (order_id, guild_id)).fetchone()
+            if order is None or order["user_id"] != user_id:
+                raise ShopError("내 주문이 아니에요.")
+            if order["status"] != "pending":
+                raise ShopError("이미 처리됐거나 환불된 주문이에요.")
+            if order["price"]:
+                raise ShopError("이미 결제한 주문이에요.")
+            if order["quote"] != amount:
+                raise ShopError("견적 금액이 바뀌었어요. 새로 받은 견적으로 결제해 주세요.")
+            balance = self._add(c, guild_id, user_id, -amount, f"주문제작 결제: 주문 #{order_id}")
+            c.execute("UPDATE users SET total_spent=total_spent+? WHERE guild_id=? AND user_id=?",
+                      (amount, guild_id, user_id))
+            c.execute("UPDATE orders SET price=? WHERE id=?", (amount, order_id))
+            return c.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone(), balance
+
     def complete_order(self, guild_id: int, order_id: int) -> sqlite3.Row:
         with self._tx() as c:
             order = c.execute(
@@ -464,6 +497,8 @@ class Database:
             ).fetchone()
             if order is None or order["status"] != "pending":
                 raise ShopError("처리 대기 중인 주문이 아니에요.")
+            if order["quote"] and not order["price"]:
+                raise ShopError("구매자가 아직 견적 금액을 결제하지 않았어요.")
             # The buyer's game codes aren't needed once the order is done.
             c.execute("UPDATE orders SET status='done', request='', job='' WHERE id=?", (order_id,))
             return order

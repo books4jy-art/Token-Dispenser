@@ -108,6 +108,10 @@ CATALOG = [
     _item(ETC, "💛 골드 회원", 500, auto="gold_pass", description="골드 회원 30일을 지급해요."),
     _item(ETC, "📺 플레이 타임 조작", 500, form=PLAYTIME, auto="playtime"),
     _item(ETC, "🥇 냥코 메달", 500, auto="medals_all", description="모든 냥코 메달을 획득해요."),
+    # 주문제작: 0원 request; an admin quotes a price with /주문 견적 and the buyer pays it from a DM.
+    _item(ETC, "🏆 주문제작 (견적 문의)", 0, form="원하는 내용 (가격표보다 많은 수량도 돼요)",
+          description="가격표에 없는 것, 가격표보다 많은 수량도 주문할 수 있어요. 관리자가 견적을 보내 드리면 "
+                      "DM의 결제하기 버튼으로 결제해 주세요."),
     # Done by an admin by hand (the codes go to the admin log).
     _item(ETC, "🖨️ 벤감소", 3000, description="관리자가 확인 후 처리해 드려요."),
     _item(ETC, "계정복사", 3000, description="관리자가 확인 후 처리해 드려요."),
