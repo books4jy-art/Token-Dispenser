@@ -1198,8 +1198,10 @@ async def deposit_webhook(request: web.Request) -> web.Response:
     text = str(data.get("text") or data.get("message") or data.get("body") or ("" if data else raw))
 
     # Placeholders the phone app didn't fill in (e.g. a misspelt notification title).
-    unfilled = re.findall(r"\[(?:not|notification)[a-z_]*\]", text)
-    filled = re.sub(r"\[(?:not|notification)[a-z_]*\]", " ", text).strip()
+    # MacroDroid writes them as [not_title] or, in newer versions, {not_title}.
+    placeholder = r"[\[{](?:not|notification)[a-z_]*[\]}]"
+    unfilled = re.findall(placeholder, text)
+    filled = re.sub(placeholder, " ", text).strip()
     # MacroDroid's "test macro" sends its placeholders unfilled: treat that as a connection test.
     if not filled or "연결 테스트" in text:
         received = text.strip()[:200] or "(빈 내용)"
