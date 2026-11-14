@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><title>입금 알림 주소 바꾸는 방법</title>
 <style>
-@font-face { font-family: "Noto Sans KR"; src: local("Noto Sans KR") format("truetype"); font-weight: 100 900; }
+@font-face { font-family: "Noto Sans KR"; src: local("Noto Sans KR"); font-weight: 100 900; }
 
   @page { size: A5; margin: 12mm 11mm 13mm; }
   * { box-sizing: border-box; }
@@ -38,6 +38,10 @@
   .check li::before { content: "☐  "; font-weight: 700; color: #2563eb; }
 
   .step { break-inside: avoid; }
+  .tabs { display: flex; background: #1d4ed8; border-radius: 2mm; padding: 1.6mm 2mm; gap: 1mm; margin: 2mm 0; font-size: 9.4pt; }
+  .tabs span { flex: 1; text-align: center; color: #dbeafe; padding: 1mm 0; border-radius: 1.4mm; white-space: nowrap; }
+  .tabs .on { color: #fff; font-weight: 700; border-bottom: 0.6mm solid #fff; border-radius: 0; }
+  .tabs .hl { background: #fde047; color: #1f2329; font-weight: 900; }
   .part { background: #1f2329; color: #fff; border-radius: 2.5mm; padding: 2.4mm 4mm; margin: 6mm 0 1mm; font-weight: 900; font-size: 12.5pt; break-after: avoid; }
   .part small { font-weight: 400; color: #d1d5db; font-size: 9pt; margin-left: 2mm; }
 </style></head><body>
@@ -45,7 +49,7 @@
 <div class="cover">
   <h1>🔗 입금 알림 주소 바꾸는 방법</h1>
   <p class="lead">입금했는데 디스코드에서 자동으로 충전되지 않을 때, 폰(MacroDroid)에 넣어 둔 <b>연결 주소</b>를 새로 바꿔 주면 돼요. 코드나 컴퓨터를 몰라도 괜찮아요. 복사해서 붙여넣기만 하면 돼요.</p>
-  <span class="time">⏱ 약 5분 · 앱 새로 설치 안 해도 돼요</span>
+  <span class="time">⏱ 약 5~10분 · 앱 새로 설치 안 해도 돼요</span>
 </div>
 
 <div class="box info">
@@ -101,31 +105,54 @@
 </div>
 
 <div class="step">
-  <h2><span class="num">5</span> 주소 바꿔 넣기</h2>
+  <h2><span class="num">5</span> HTTP 요청 화면 열기</h2>
   <ol class="taps">
     <li>파란색 <b>동작</b> 칸에 있는 <b>HTTP 요청 (POST)</b> 를 눌러요. 메뉴가 뜨면 <span class="btn">구성</span> 또는 <span class="btn">설정</span> <span class="en">(Configure)</span> 을 눌러요.</li>
-    <li><b>URL</b> 칸에 있는 예전 주소를 <b>전부 지워요.</b><br><span class="en">칸을 길게 눌러 '모두 선택' → 지우기(⌫). 칸이 완전히 비었는지 확인해요.</span></li>
-    <li>빈 URL 칸을 <b>길게</b> 눌러 <span class="btn">붙여넣기</span>를 눌러요.</li>
-    <li><b>다른 칸(요청 방법 POST, 본문)은 건드리지 마세요.</b> 주소만 바꾸면 돼요.</li>
-    <li>오른쪽 위 <span class="btn">✓</span> 또는 <span class="btn">확인</span>을 눌러요.</li>
+    <li>맨 위에 파란색 <b>HTTP 요청</b> 화면이 열리고, 그 아래에 탭 4개가 보여요.</li>
+  </ol>
+  <div class="tabs"><span class="on">설정</span><span class="hl">쿼리 파라미터</span><span>Body 내용</span><span>헤더 파라미터</span></div>
+  <div class="box warn"><b class="t">⚠️ 예전 비밀번호가 숨어 있는 곳</b>MacroDroid는 주소의 <b>token=…</b> 부분(비밀번호)을 <b>쿼리 파라미터</b> 탭에 따로 저장하기도 해요. 여기에 예전 비밀번호가 남아 있으면, URL을 새로 바꿔도 <b>예전 비밀번호가 전송</b>돼서 연결이 안 돼요. 그래서 6단계에서 먼저 지워요.</div>
+</div>
+
+<div class="step">
+  <h2><span class="num">6</span> 쿼리 파라미터 탭 비우기</h2>
+  <ol class="taps">
+    <li>위쪽의 <span class="btn">쿼리 파라미터</span> 탭을 눌러요.</li>
+    <li>목록에 <b>token</b> 같은 항목이 있으면 <b>모두 지워요.</b><br><span class="en">항목 옆 휴지통(🗑) 아이콘을 누르거나, 항목을 길게 눌러 '삭제'.</span></li>
+    <li>탭 안이 <b>완전히 비어 있는지</b> 확인해요.</li>
+  </ol>
+  <div class="box ok">✅ 쿼리 파라미터 탭에 아무것도 없으면 성공!</div>
+</div>
+
+<div class="step">
+  <h2><span class="num">7</span> 새 주소 넣기</h2>
+  <ol class="taps">
+    <li>위쪽의 <span class="btn">설정</span> 탭을 눌러요.</li>
+    <li><b>URL 입력</b> 칸에 있는 예전 주소를 <b>전부 지워요.</b><br><span class="en">칸을 길게 눌러 '모두 선택' → 지우기(⌫). 주소가 길어서 끝이 안 보여도 전부 지워져야 해요.</span></li>
+    <li>빈 <b>URL 입력</b> 칸을 <b>길게</b> 눌러 <span class="btn">붙여넣기</span>를 눌러요.</li>
+    <li>다시 <span class="btn">쿼리 파라미터</span> 탭을 눌러 봐요.
+      <ul><li><b>비어 있으면</b> → 괜찮아요.</li>
+      <li><b>token 항목이 생겼으면</b> → <b>딱 1개</b>만 있고, 값이 관리자가 보내 준 <b>새 비밀번호</b>와 같으면 괜찮아요. 2개 이상이면 예전 것을 지워요.</li></ul></li>
   </ol>
   <div class="field">
     <span class="k">맞는지 확인</span><span>주소가 <b>https://</b> 로 시작해요</span>
     <span class="k"></span><span>맨 앞·맨 뒤에 <b>빈칸이나 줄바꿈이 없어요</b></span>
     <span class="k"></span><span><b>token=</b> 뒤의 글자가 끝까지 다 있어요</span>
   </div>
+  <div class="box info"><b class="t">건드리지 마세요</b><b>요청 종류(POST)</b>, <span class="btn">Body 내용</span> 탭, <span class="btn">헤더 파라미터</span> 탭은 그대로 두세요. Body 내용 탭에는 <b>[알림 제목] [알림 텍스트]</b> 같은 글자 두 개가 들어 있어야 해요.</div>
 </div>
 
 <div class="step">
-  <h2><span class="num">6</span> 저장하기</h2>
+  <h2><span class="num">8</span> 저장하기</h2>
   <ol class="taps">
-    <li>매크로 화면의 저장 버튼 <span class="btn">✓</span> 또는 <span class="btn">💾</span> 을 눌러요.</li>
+    <li>HTTP 요청 화면 오른쪽 위 <span class="btn">✓</span> 를 눌러요.</li>
+    <li>매크로 화면에서도 저장 버튼 <span class="btn">✓</span> 또는 <span class="btn">💾</span> 을 눌러요.</li>
     <li>매크로 목록에서 <b>'입금 알림 전달'</b>의 <b>스위치가 켜져</b> 있는지 확인해요.</li>
   </ol>
 </div>
 
 <div class="step">
-  <h2><span class="num">7</span> 연결 테스트</h2>
+  <h2><span class="num">9</span> 연결 테스트</h2>
   <ol class="taps">
     <li>매크로 목록에서 <b>'입금 알림 전달'</b>을 길게 눌러요. <span class="en">(또는 매크로를 열고 오른쪽 위 ⋮)</span></li>
     <li><span class="btn">테스트 매크로</span> <span class="en">(Test Macro / 동작 테스트)</span> 를 눌러요.</li>
@@ -137,8 +164,9 @@
 <div class="box info">
   <b class="t">그래도 안 될 때</b>
   <ul>
-    <li><b>테스트했는데 연결 확인이 안 와요</b> → 5단계를 다시 해 주세요. 주소가 잘렸거나 빈칸이 들어간 경우가 가장 많아요. 폰 인터넷(와이파이·데이터)이 켜져 있는지도 확인해요.</li>
+    <li><b>테스트했는데 연결 확인이 안 와요</b> → 6~7단계를 다시 해 주세요. <b>쿼리 파라미터 탭에 예전 token이 남아 있거나</b>, 주소가 잘렸거나 빈칸이 들어간 경우가 가장 많아요. 폰 인터넷(와이파이·데이터)이 켜져 있는지도 확인해요.</li>
     <li><b>테스트는 되는데 실제 입금이 충전 안 돼요</b> → 폰 설정 → 애플리케이션 → MacroDroid → 배터리 → <b>제한 없음</b>으로 바꿔 주세요. 토스 앱 알림이 켜져 있는지도 확인해요.</li>
+    <li><b>그래도 안 되면</b> → <span class="btn">쿼리 파라미터</span> 탭과 <span class="btn">Body 내용</span> 탭을 캡처해서 관리자에게 보내 주세요. (비밀번호 부분은 가리고)</li>
     <li><b>메뉴 이름이 달라요</b> → 폰 기종이나 앱 버전마다 조금 달라요. 비슷한 이름을 찾거나, 화면을 캡처해서 관리자에게 보내 주세요.</li>
   </ul>
 </div>
