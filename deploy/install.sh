@@ -29,7 +29,7 @@ if [ ! -f .env ]; then
     sed -i 's/^WEBHOOK_HOST=.*/WEBHOOK_HOST=127.0.0.1/' .env
     grep -q '^WEBHOOK_HOST=' .env || echo 'WEBHOOK_HOST=127.0.0.1' >> .env
     # 웹훅 비밀번호를 무작위로 만들어 둬요.
-    SECRET="$(.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+    SECRET="$(.venv/bin/python -c 'import secrets; print(secrets.token_hex(24))')"
     sed -i "s/^WEBHOOK_SECRET=.*/WEBHOOK_SECRET=$SECRET/" .env
     chmod 600 .env
     echo "▶ .env 파일을 만들었어요 (웹훅 비밀번호 자동 생성)."
